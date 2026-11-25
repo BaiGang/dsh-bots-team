@@ -1,5 +1,5 @@
 /**
- * Bot team, Host half: the durable roster of AI bots that the Team panel and the
+ * DSH Bot Team, host backend: the durable roster of AI bots that the Team panel and the
  * agent tools share.
  *
  * Each bot is a real DSH Session in a folder of its own, and the folder carries

@@ -1,10 +1,10 @@
+<img src="icon.svg" width="72" alt="DSH Bot Team icon" align="right" />
+
 # DSH Bot Team
 
-A roster of AI bots in the [DeepSeek Harness](https://github.com/deepseek-ai) left sidebar.
-Every bot is a real DSH Session with its own folder, its own persona, and its own
-conversation — talk to one like a contact instead of hunting the session list.
+A persistent roster of AI bots in the [DeepSeek Harness](https://github.com/deepseek-ai) sidebar.
 
-<img src="icon.svg" width="72" alt="Bot team icon" align="right" />
+Every bot is a real DSH Session backed by its own folder, persona, and conversation history — talk to one like a teammate in a contact list instead of hunting through the session log.
 
 **English** | [中文](README.zh.md)
 
@@ -18,10 +18,33 @@ conversation — talk to one like a contact instead of hunting the session list.
 └───────────────────────────────────────────────────────┘
 ```
 
-## Team shapes to copy
+## Why?
 
-You do not have to design a roster from scratch. Two shapes work well, and you can
-edit either into your own after one conversation.
+DSH already runs agents well. What a chat-style roster adds is **persistence and organization**: a stable identity per bot (name, emoji, role), a dedicated workspace folder, and an ongoing conversation reachable in one click.
+
+The panel acts as a messenger interface over native DSH Sessions rather than a separate runtime. Sending a message here invokes `session.prompt()` — the exact same path used by the main composer — so replies stream into both this panel and the bot's native session simultaneously. Clicking **Open chat** hands you the full DSH workspace (tools, approvals, files, and terminals) whenever you need deeper control.
+
+## How It Works: Folder-Backed Personas
+
+When you create a bot, the host backend writes its instructions directly to `<bot-folder>/AGENTS.md`. Because DSH's native workspace loader automatically reads `AGENTS.md` for every session started in that directory:
+
+- **Zero prompt hacks** — Personas load through DSH's native instruction mechanism rather than fragile system-prompt injections.
+- **Plain-text persistence** — Instructions survive restarts and remain readable, diffable, and editable right on disk.
+- **Clean context isolation** — Each bot folder includes a `.git` root marker, preventing parent directory `AGENTS.md` instructions from leaking in.
+
+## Features
+
+- **Sidebar integration** — Adds a global **Team** icon (two bot heads) to the left sidebar and opens the roster view in the main column.
+- **Live roster** — Displays each bot's avatar, name, role, and real-time working/idle indicator. Auto-refreshes while open, so bots hired from other windows or chats appear automatically.
+- **Inline chat** — Includes a message transcript, tool-call chips, live status indicator, and a composer wired directly into the underlying DSH Session.
+- **Lazy session startup** — A bot's Session is created on its first message inside its dedicated folder, ensuring `AGENTS.md` instructions are loaded before its first turn.
+- **Built-in role templates** — Ships with **Scout** (Researcher), **Forge** (Builder), **Ledger** (Analyst), and **Quill** (Writer). Three starter bots are pre-hired on first launch.
+- **Agent-manageable** — Built-in agent tools let any DSH chat hire, brief, or fire bots conversationally.
+- **Bilingual UI** — Supports English and Simplified Chinese (`简体中文`), automatically matching your DSH locale.
+
+## Team Recipes
+
+You do not have to design a roster from scratch. Two shapes work well, and you can edit either into your own after one conversation.
 
 **Research desk** — a paper or an experiment goes in, a reviewed judgement comes out:
 
@@ -39,64 +62,24 @@ edit either into your own after one conversation.
 | Reviewer | 评审 | Read the diff before it ships: correctness, tests that would have caught the bug, anything that breaks a caller. |
 | Operator | 运维 | Watch what runs, reproduce failures from the logs, and hand back a fix or a precise question. |
 
-Create them in the panel (**New bot**, then type the role and persona), or just ask
-in a chat: *"hire a reviewer bot that reads like a hostile but fair referee, and a
-librarian that returns briefs with links"*. Names, emoji, and roles are yours —
-the persona is what the bot actually follows, and you can rewrite it any time.
+Create them in the panel (**New bot**, then type the role and persona), or just ask in a chat: *"hire a reviewer bot that reads like a hostile but fair referee, and a librarian that returns briefs with links."* Names, emoji, and roles are yours — the persona is what the bot actually follows, and you can rewrite it any time.
 
-## Why
+## Installation
 
-DSH already runs agents well. What a chat-shaped team adds is a place to keep them:
-a stable identity per bot (name, emoji, role), a stable folder, and a stable
-conversation, reachable in one click.
+**Prerequisites:** DSH `0.2.x` or newer with the Web GUI enabled.
 
-The panel is a messenger over real Sessions, not a separate runtime. Sending a
-message here calls `session.prompt()` — the same path the composer uses — so the
-reply streams into this panel and into the bot's own conversation alike, and
-**Open chat** hands you the full DSH surface (tools, approvals, files, terminals).
+1. Clone this repository:
 
-## Every bot gets a folder, and the folder is the persona
+   ```sh
+   git clone https://github.com/BaiGang/dsh-bots-team.git
+   ```
 
-When a bot is created, the Host half writes its instructions to
-`<bot folder>/AGENTS.md`. DSH's own workspace-instruction loader reads that file
-for every Session started in the folder, so:
+2. In DSH, navigate to **Plugins → Add plugin** and select the cloned directory.
+3. Reload the browser page so the client bundle joins the boot graph. **Team** will appear in the left sidebar.
 
-- the character arrives through a supported mechanism rather than a private
-  prompt hack;
-- it survives restarts and is readable, diffable, and editable on disk;
-- a `.git` marker inside each bot folder makes that folder its own instruction
-  root, so guidance from parent directories never leaks in.
+### Configuration (Optional)
 
-## Features
-
-- **Sidebar entry** — a global panel icon (two bot heads) next to the other
-  panels; the same id opens the roster page in the main column.
-- **Roster** — avatar, name, role, and a live working/idle dot; the roster
-  refreshes itself while open, so a bot hired from another window appears.
-- **Per-bot conversation** — transcript, tool-call chips, working indicator, and
-  a composer that queues into the same Session as the native chat.
-- **First message starts the bot** — the Session is created lazily in the bot's
-  folder, bound to the roster entry, and prompted, so its instructions are loaded
-  before it speaks.
-- **Role templates** — Scout (researcher), Forge (builder), Ledger (analyst),
-  Quill (writer); three starters are hired on first run.
-- **Agent tools** — the same roster is editable by an agent.
-- **Bilingual UI** — English and 简体中文, following the DSH locale.
-
-## Install
-
-Requires a DSH profile with the Web GUI (the panel is a browser plugin) and DSH
-`0.2.x` or newer.
-
-```sh
-git clone https://github.com/BaiGang/dsh-bots-team.git
-```
-
-Then open **Plugins → Add plugin** in DSH and choose the cloned directory. The
-bundle activates immediately; reload the page so the new browser bundle joins the
-boot graph, and **Team** appears in the left sidebar.
-
-The plugin row accepts one optional config field:
+You can customize the storage directory in your plugin configuration:
 
 ```yaml
 - id: bots-team
@@ -105,74 +88,66 @@ The plugin row accepts one optional config field:
     dataDir: /absolute/path/to/team-data   # default: $DSH_HOME/bots-team
 ```
 
-## Use it
+## Quick Start
 
-1. Open **Team** in the left sidebar.
-2. Pick a bot, or **New bot** and start from a role template.
-3. Type a message. The first message creates the bot's Session in its own folder;
-   later messages continue the same conversation.
-4. **Open chat** switches to that Session in the main column.
-5. **Edit** changes name, emoji, role, or instructions; instructions are rewritten
-   to `AGENTS.md` for the next message.
+1. Click **Team** in the left sidebar.
+2. Select a starter bot, or click **+ New bot** to create one from a template.
+3. Send a message. The first message initializes the bot's Session in its folder; subsequent messages continue the same thread.
+4. Click **Open chat** anytime to jump into the full DSH session view in the main column.
+5. Click **Edit** to update a bot's name, emoji, role, or instructions (`AGENTS.md` updates immediately for the next turn).
 
-## Agent tools
+## Agent Tools
 
-| Tool | What it does |
+Other agents in DSH can inspect and manage your roster programmatically:
+
+| Tool | Description |
 |---|---|
-| `team_roster` | Lists every bot with its role, persona, folder, and whether it has a conversation. |
-| `team_hire` | Adds a bot with a name, role, persona, and emoji, and writes its folder. |
-| `team_brief` | Rewrites one bot's persona or role. |
-| `team_fire` | Removes a bot from the roster; its folder and Session stay on disk. |
+| `team_roster` | Lists all bots along with their role, persona, folder path, and session status. |
+| `team_hire` | Creates a new bot (name, role, persona, emoji) and initializes its workspace folder. |
+| `team_brief` | Updates an existing bot's persona instructions or role. |
+| `team_fire` | Removes a bot from the roster while leaving its folder and Session intact on disk. |
 
-So "hire a reviewer bot that is harsh about tests" works from a chat, and the new
-bot shows up in the panel on its next refresh.
+> **Example:** Ask any DSH chat to *"Hire a reviewer bot that is strict about unit tests"* — the new bot will appear in your Team panel on the next refresh.
 
-## Where the data lives
+## Data & Storage
 
-- Roster: `$DSH_HOME/bots-team/team.json` (`~/.dsh/bots-team/team.json` by default).
-- Bot folders: `$DSH_HOME/bots-team/bots/<bot-id>/`, each with `AGENTS.md` and the
-  `.git` instruction-root marker.
-- The panel talks to the Host half over a loopback endpoint, `/bots-team/api`.
+- **Roster manifest:** `$DSH_HOME/bots-team/team.json` (defaults to `~/.dsh/bots-team/team.json`).
+- **Bot workspaces:** `$DSH_HOME/bots-team/bots/<bot-id>/`, each containing `AGENTS.md` and a `.git` root marker.
+- **API transport:** The browser panel communicates with the host backend over the loopback endpoint `/bots-team/api`.
 
-Removing a bot drops it from the roster only. The folder, its files, and its
-Session are left alone, so a removal is recoverable.
+**Safe deletion:** Firing or deleting a bot only removes its entry from `team.json`. Its workspace folder, files, and DSH Session remain untouched on disk for easy recovery.
 
-## Layout
+## Project Structure
 
-| File | Role |
+| Path | Purpose |
 |---|---|
-| [`index.js`](index.js) | Host half: roster store, bot folders and `AGENTS.md`, `/bots-team/api`, agent tools. |
-| [`client.js`](client.js) | Browser half: the `sidebar.panellist` entry and the `main` panel, as one `__ModuleLoader__` factory. |
-| [`cordis.patch.yml`](cordis.patch.yml) | The bundle patch that inserts the Host row. |
-| [`locale/`](locale) | Plugin-manager title, description, and detail document path. |
-| [`docs/DETAIL.md`](docs/DETAIL.md) | The page DSH shows inside the plugin manager. |
-| [`test/smoke.mjs`](test/smoke.mjs) | 24 checks over both halves, without a browser. |
+| [`index.js`](index.js) | **Host backend:** Roster store, workspace/`AGENTS.md` provisioning, `/bots-team/api` routes, and agent tools. |
+| [`client.js`](client.js) | **Browser client:** Registers the `sidebar.panellist` icon and `main` panel via a single `__ModuleLoader__` factory. |
+| [`cordis.patch.yml`](cordis.patch.yml) | Bundle patch that registers the host plugin row. |
+| [`locale/`](locale) | Localized plugin metadata (titles, descriptions, and detail doc paths). |
+| [`docs/DETAIL.md`](docs/DETAIL.md) | Plugin overview displayed inside the DSH Plugin Manager. |
+| [`assets/`](assets) | Storefront tile for the plugin catalog, and the framed SVG it is rendered from. |
+| [`test/smoke.mjs`](test/smoke.mjs) | Headless test suite (24 checks covering both host and client). |
 
-The Host half imports Node built-ins only, so it resolves from whatever profile
-installs it. The Client half imports nothing but React from the browser module
-table.
+**Zero external dependencies:** The host backend uses only Node.js built-ins so it runs cleanly across any DSH profile. The browser client imports only React from DSH's runtime module table.
 
 ## Development
 
+Run the smoke test suite:
+
 ```sh
-node test/smoke.mjs      # all checks; exits non-zero on failure
+node test/smoke.mjs      # runs 24 checks; exits non-zero on failure
 ```
 
-The suite drives the registered HTTP route through a fake Node request pair,
-exercises create/update/bind/delete and the four tools against a temporary data
-directory, then loads `client.js` through a `__ModuleLoader__` stub and a small
-React shim to run the real panel components and inspect their output tree. It
-covers contracts and data flow, not pixels.
+The test suite exercises the HTTP routes via mocked Node request/response pairs, verifies CRUD operations and all four agent tools against a temporary directory, and loads `client.js` through a `__ModuleLoader__` stub with a lightweight React shim to assert component trees and data flow — no browser required.
 
-## Limits
+## Known Limitations
 
-- The panel needs the Host half; a desktop shell that serves the client from
-  `file://` cannot reach the loopback endpoint, and the panel says so.
-- One roster per profile; bots are not per-project.
-- A bot owns one conversation. Starting over means hiring a new bot; forking a
-  conversation is still done from the session list.
-- Bots inherit the profile's model. Per-bot model selection is not implemented.
-- Deleting a bot does not archive its Session; that stays in the session list.
+- **Requires HTTP loopback:** Desktop shells serving the UI over `file://` cannot reach `/bots-team/api` (the panel displays an explicit notice in this environment).
+- **Profile-scoped:** One roster is shared across the active DSH profile rather than scoped per project.
+- **Single thread per bot:** Each bot maintains one continuous conversation. Starting fresh requires hiring a new bot, while conversation forking must be done from the main session list.
+- **Shared model config:** Bots inherit the active profile's model; per-bot model overrides are not yet supported.
+- **Manual session cleanup:** Removing a bot from the roster does not delete or archive its underlying Session in DSH's main session list.
 
 ## License
 

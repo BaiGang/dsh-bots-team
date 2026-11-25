@@ -1,10 +1,10 @@
 /**
- * Bot team, browser half: the `Team` entry in the left sidebar and the roster
+ * DSH Bot Team, browser client: the `Team` entry in the left sidebar and the roster
  * panel it opens.
  *
  * The panel is a messaging surface over real DSH Sessions. Every bot owns one
- * Session in its own folder; the folder's `AGENTS.md` (written by the Host
- * half) is the bot's persona, so the personality arrives through DSH's own
+ * Session in its own folder; the folder's `AGENTS.md` (written by the host
+ * backend) is the bot's persona, so the personality arrives through DSH's own
  * workspace-instruction loader rather than a private prompt hack. Sending a
  * message here is `session.prompt()`, exactly what the composer does, so the
  * reply streams into this panel and into the bot's own conversation alike.
@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
     const PANEL_ID = 'bots-team'
     /** Locale namespace owned by this plugin. */
     const NS = 'botsTeam'
-    /** Roster endpoint served by this plugin's Host half. */
+    /** Roster endpoint served by this plugin's host backend. */
     const API = 'bots-team/api'
 
     const EN = {
@@ -226,7 +226,7 @@ window.__ModuleLoader__.load({
         }
       }
 
-      /** Load the roster from the Host half. */
+      /** Load the roster from the host backend. */
       async load() {
         this.set({ phase: 'loading', error: '' })
         try {

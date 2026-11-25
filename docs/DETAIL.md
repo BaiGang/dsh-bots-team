@@ -11,7 +11,7 @@ them. The panel gives each bot a stable identity (name, emoji, role), a stable
 folder, and a stable conversation, and lets you reach any of them in one click
 instead of hunting the session list.
 
-The persona is not a private prompt hack. When a bot is created, the Host half
+The persona is not a private prompt hack. When a bot is created, the host backend
 writes its instructions to `<bot folder>/AGENTS.md`. DSH's own workspace
 instruction loader reads that file for every Session started in the folder, so
 the bot's character arrives through the same mechanism as any project guidance,
@@ -50,7 +50,7 @@ persona. The persona is what the bot follows, and it can be rewritten any time.
 
 ## What the agent sees
 
-The Host half also registers four tools, so an agent can manage the same roster:
+The host backend also registers four tools, so an agent can manage the same roster:
 
 | Tool | What it does |
 |---|---|
@@ -72,7 +72,7 @@ session are left alone, so a removal is recoverable.
 
 ## Limits
 
-- The panel talks to the Host half over a loopback HTTP endpoint
+- The panel talks to the host backend over a loopback HTTP endpoint
   (`/bots-team/api`). It answers same-origin browser requests on the machine that
   runs DSH; a page served from another origin is refused. A desktop shell that
   loads the client from `file://` cannot reach it, so the panel reports that the

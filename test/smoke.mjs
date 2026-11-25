@@ -1,9 +1,9 @@
 /**
  * Smoke tests for the bots-team bundle, run without a browser.
  *
- * The Host half is exercised through the route it registers (a fake Node
+ * The host backend is exercised through the route it registers (a fake Node
  * request pair over the real handler) and against a temporary data directory.
- * The Client half is loaded through a minimal `__ModuleLoader__` stub and a
+ * The browser client is loaded through a minimal `__ModuleLoader__` stub and a
  * very small React shim, so the real component functions run and their output
  * tree is inspected. This covers registration contracts, data flow, and
  * render-time references; it does not replace looking at the panel in a browser.
@@ -26,7 +26,7 @@ const check = async (name, run) => {
   }
 }
 
-/* ------------------------------------------------------------------ Host half */
+/* ------------------------------------------------------------------ host backend */
 
 const host = await import('../index.js')
 const routes = []
@@ -169,7 +169,7 @@ await check('survives a corrupt roster file', async () => {
   await rm(broken, { recursive: true, force: true })
 })
 
-/* ---------------------------------------------------------------- Client half */
+/* ---------------------------------------------------------------- browser client */
 
 /** Minimal React surface used by the panel. */
 function createReactShim() {
