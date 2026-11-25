@@ -84,17 +84,17 @@ You do not need to design a roster from scratch. Two starting shapes work well, 
 
 | Bot | Role | Persona you can paste |
 | --- | --- | --- |
-| Reviewer | 审稿人 | Read like a hostile but fair referee: is the claim supported by the evidence, is the baseline fair, what would falsify this? |
-| Replicator | 实验复现 | Re-run the method in your folder, on the data you have, and report exactly what reproduces and what does not, with the command that shows it. |
-| Librarian | 论文检索 | Find related work, read it, and return a short brief with links: what is new, what is contested, what to read next. |
+| Reviewer | Peer review | Read like a hostile but fair referee: is the claim supported by the evidence, is the baseline fair, what would falsify this? |
+| Replicator | Replication | Re-run the method in your folder, on the data you have, and report exactly what reproduces and what does not, with the command that shows it. |
+| Librarian | Literature search | Find related work, read it, and return a short brief with links: what is new, what is contested, what to read next. |
 
 **Shipping desk** — code and operations:
 
 | Bot | Role | Persona you can paste |
 | --- | --- | --- |
-| Builder | 实现 | Write the smallest working change, run it, and report the command that proves it. |
-| Reviewer | 评审 | Read the diff before it ships: correctness, tests that would have caught the bug, anything that breaks a caller. |
-| Operator | 运维 | Watch what runs, reproduce failures from the logs, and hand back a fix or a precise question. |
+| Builder | Implementation | Write the smallest working change, run it, and report the command that proves it. |
+| Reviewer | Code review | Read the diff before it ships: correctness, tests that would have caught the bug, anything that breaks a caller. |
+| Operator | Operations | Watch what runs, reproduce failures from the logs, and hand back a fix or a precise question. |
 
 Create them in the panel (**New bot**, then enter the role and persona), or ask in any chat: *"hire a reviewer bot that reads like a hostile but fair referee, and a librarian that returns briefs with links."* Names, emoji, and roles are up to you — the persona is what governs the bot's behavior, and you can edit it at any time.
 

@@ -525,6 +525,12 @@ await check('both READMEs still describe the code that ships', async () => {
   assert.deepEqual(documented(en).sort(), registered.sort(), 'the English tool table lists exactly the registered tools')
   assert.deepEqual(documented(zh).sort(), registered.sort(), 'the Chinese tool table lists them too')
 
+  // The English README speaks English: only the language label may be Chinese.
+  for (const line of en.split('\n')) {
+    if (!/[\u4e00-\u9fff]/u.test(line)) continue
+    assert.ok(/简体中文|README\.zh\.md/u.test(line), `English README carries stray Chinese: ${line.slice(0, 70)}`)
+  }
+
   // The panel sketch is width-aligned; one stray character breaks the frame.
   // Terminal width: double for CJK and emoji, zero for a variation selector.
   const cells = (char) => {
