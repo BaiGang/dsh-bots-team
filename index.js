@@ -24,7 +24,7 @@ import path from 'node:path'
 /** Cordis plugin name. */
 export const name = 'bots-team'
 /** Services this plugin contributes to and drives. */
-export const inject = ['webServer', 'tools', 'agents', 'systemPrompt']
+export const inject = ['webServer', 'tools', 'agents', 'systemPrompt', 'workspaceRegistry', 'sessions', 'sessionTitle']
 
 /** Route prefix owned by this plugin. */
 const API_PREFIX = '/bots-team/api'
@@ -286,6 +286,8 @@ class TeamStore {
         ? raw.sessionId
         : (typeof existing?.sessionId === 'string' && existing.sessionId !== '' ? existing.sessionId : null),
       chief: existing?.chief === true || raw?.chief === true,
+      organized: raw?.organized === true || existing?.organized === true,
+      workspaceId: text(raw.workspaceId, existing?.workspaceId ?? '', 200) || undefined,
       createdAt: Number(raw.createdAt) || existing?.createdAt || Date.now(),
       updatedAt: Date.now(),
     }
@@ -431,6 +433,9 @@ class TeamStore {
       bot.sessionId = typeof sessionId === 'string' && sessionId !== '' ? sessionId : null
       bot.updatedAt = Date.now()
       await this.write(state)
+      return bot
+    }).then(async (bot) => {
+      await this.organize(bot)
       return bot
     })
   }
@@ -638,6 +643,57 @@ class TeamStore {
     void Promise.resolve(agent.whenIdle?.())
       .then(() => this.settle(record.id, 'done').catch(() => {}))
       .catch(error => this.settle(record.id, 'failed', String(error?.message ?? error)).catch(() => {}))
+  }
+
+  /**
+   * Give a bound bot a home: a Workspace named after it over its own folder,
+   * the Session attached to that Workspace, and the Session titled with the
+   * bot's name. Without this a bot's Session lands in the sidebar's ungrouped
+   * list as an untitled conversation.
+   * @param bot - bot with a bound Session.
+   */
+  async organize(bot) {
+    const sessionId = bot.sessionId
+    if (typeof sessionId !== 'string' || sessionId === '') return
+    try {
+      const workspace = await this.workspaces?.create?.(bot.folder, bot.name)
+      if (workspace !== undefined) {
+        if (workspace.title !== bot.name) await workspace.setTitle?.(bot.name)
+        const attached = Array.isArray(workspace.sessionIds) && workspace.sessionIds.includes(sessionId)
+        if (!attached) await workspace.attachSession?.(sessionId)
+      }
+    } catch (error) {
+      this.warn(`bots-team: could not group ${bot.name} (${String(error?.message ?? error)})`)
+    }
+    if (bot.organized === true) return
+    try {
+      let session = this.sessions?.get?.(sessionId)
+      if (session === undefined) {
+        await this.resume(sessionId)
+        session = this.sessions?.get?.(sessionId)
+      }
+      if (session !== undefined) this.sessionTitle?.rename?.(session, bot.name)
+      await this.mutate(async (state) => {
+        const stored = state.bots.find(candidate => candidate.id === bot.id)
+        if (stored !== undefined) stored.organized = true
+        await this.write(state)
+      })
+    } catch (error) {
+      this.warn(`bots-team: could not title ${bot.name}'s session (${String(error?.message ?? error)})`)
+    }
+  }
+
+  /**
+   * Group and title every bot that already has a Session, once. A bot hired
+   * later is organized when its Session is bound.
+   */
+  async migrate() {
+    await this.load()
+    for (const bot of [...(this.state?.bots ?? [])]) {
+      if (typeof bot.sessionId !== 'string' || bot.sessionId === '') continue
+      if (bot.organized === true) continue
+      await this.organize(bot)
+    }
   }
 
   /**
@@ -1009,10 +1065,16 @@ export function apply(ctx, config = {}) {
   const store = new TeamStore(root, warn)
   store.unattended = unattended()
   store.agents = ctx.agents
+  store.sessions = ctx.sessions
+  store.sessionTitle = ctx.sessionTitle
+  store.workspaces = ctx.workspaceRegistry
   store.deliver = (bot, record) => store.wake(bot, record)
 
-  // Warm the roster (and its folders) without blocking activation.
-  void store.load().catch(error => warn(`bots-team: roster unavailable (${String(error?.message ?? error)})`))
+  // Warm the roster (and its folders) without blocking activation, then give
+  // every bot that already has a conversation its Workspace and title.
+  void store.load()
+    .then(() => store.migrate())
+    .catch(error => warn(`bots-team: roster unavailable (${String(error?.message ?? error)})`))
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',

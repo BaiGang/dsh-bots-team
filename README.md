@@ -54,6 +54,7 @@ A delivery that could not start — usually because a bot has no conversation ye
 - **Sidebar integration** — Adds a global **Team** icon (two bot heads) to the left sidebar and opens the roster view in the main column.
 - **A chief of staff** — a built-in bot, pinned first in the roster, that decomposes a request and proposes assignments. Fired by accident, it is hired again on the next start, and its folder keeps the conversation.
 - **A confirmation gate** — proposals wait in the panel until you dispatch them; the sidebar entry shows how many are waiting, and each dispatch lands in the target bot's own session.
+- **Named in the sidebar** — a bot's conversation is grouped under a Workspace named after the bot, and the Session carries the bot's name as its title, so the list reads as a team instead of untitled chats in an ungrouped bucket.
 - **Live roster** — Displays each bot's avatar, name, role, and real-time working/idle indicator. Auto-refreshes while open, so bots hired from other windows or chats appear automatically.
 - **Inline chat** — Includes a message transcript, tool-call chips, live status indicator, and a composer wired directly into the underlying DSH Session.
 - **Lazy session startup** — A bot's Session is created on its first message inside its dedicated folder, ensuring `AGENTS.md` instructions are loaded before its first turn.

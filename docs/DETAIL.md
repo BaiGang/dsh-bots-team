@@ -28,6 +28,10 @@ survives restarts, and stays readable and editable on disk.
 5. **Edit** changes the name, emoji, role, or instructions. Instructions are
    rewritten to `AGENTS.md` for the next message.
 
+A bot's Session is grouped under a Workspace named after the bot and titled with
+its name, so the sidebar shows the team rather than an untitled conversation in
+the ungrouped list.
+
 Four bots exist on first run: **Chief** (chief of staff) pinned first, then the
 starters Scout, Forge, and Ledger. Delete any of them if you would rather start
 empty; the chief is hired again on the next start, with its folder kept.

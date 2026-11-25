@@ -36,6 +36,9 @@ const sections = []
 const agents = new Map()
 /** Messages handed to a bot through the dispatch path. */
 const delivered = []
+const workspaces = []
+const titles = new Map()
+const liveSessions = new Set(['sess-scout'])
 let releaseIdle = () => {}
 const fakeAgent = (sessionId) => {
   if (agents.has(sessionId)) return agents.get(sessionId)
@@ -63,6 +66,25 @@ const hostCtx = {
   systemPrompt: {
     section: (section) => { sections.push(section); return () => {} },
   },
+  // Workspace + title fakes: record what the host does for a bound Session.
+  workspaceRegistry: {
+    create: async (folder, title) => {
+      const existing = workspaces.find(item => item.path === folder)
+      if (existing !== undefined) return existing
+      const created = {
+        id: `ws-${workspaces.length + 1}`,
+        path: folder,
+        title: title ?? folder,
+        sessionIds: [],
+        setTitle: async (next) => { created.title = next },
+        attachSession: async (sessionId) => { if (!created.sessionIds.includes(sessionId)) created.sessionIds.push(sessionId) },
+      }
+      workspaces.push(created)
+      return created
+    },
+  },
+  sessions: { get: sessionId => (liveSessions.has(sessionId) ? { id: sessionId } : undefined) },
+  sessionTitle: { rename: (session, title) => { titles.set(session.id, title); return { title } } },
 }
 const configDir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-wired-'))
 host.apply(hostCtx, { dataDir: configDir })
@@ -322,6 +344,31 @@ await check('team_status reports sessions, live agents, and recent assignments',
   assert.equal(report.unattended, false)
   assert.ok(report.assignments.length >= 1)
   assert.ok(report.assignments.some(record => record.status === 'done'))
+})
+
+await check('a bound session is grouped under a workspace named after its bot', async () => {
+  const grouped = workspaces.find(item => item.path.endsWith('/bots/scout'))
+  assert.ok(grouped, 'binding a session creates a workspace for that bot folder')
+  assert.equal(grouped.title, 'Scout')
+  assert.deepEqual(grouped.sessionIds, ['sess-scout'])
+  assert.equal(titles.get('sess-scout'), 'Scout', 'and the untitled conversation is named')
+})
+
+await check('the same bot is not renamed twice', async () => {
+  const before = titles.get('sess-scout')
+  const store2 = new host.TeamStore(dataDir, () => {})
+  store2.workspaces = hostCtx.workspaceRegistry
+  store2.sessions = hostCtx.sessions
+  store2.sessionTitle = { rename: () => { throw new Error('must not rename again') } }
+  await store2.migrate()
+  assert.equal(titles.get('sess-scout'), before, 'the organized flag stops a second rename')
+})
+
+await check('a bot with no session gets no workspace', async () => {
+  const hired = await wirePost({ op: 'create', bot: { name: 'Quiet', role: 'Waiter', persona: 'Wait for work.' } })
+  const folder = hired.body.bot.folder
+  const lonely = workspaces.find(item => item.path === folder)
+  assert.equal(lonely, undefined, 'nothing is created until a conversation exists')
 })
 
 await check('the standing note names the team and the confirmation gate', async () => {
