@@ -1,15 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36" role="img" aria-label="Bot team">
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="Bot team">
   <defs>
-    <linearGradient id="botTeamFront" x1="7" y1="12.5" x2="22.5" y2="25" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#5b76ff"/>
-      <stop offset="1" stop-color="#3c53d9"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7080ff"/>
+      <stop offset="1" stop-color="#2b36b8"/>
     </linearGradient>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="180" height="180" rx="42"/>
+    </clipPath>
   </defs>
-  <rect x="15.6" y="6.4" width="13.2" height="11.2" rx="3.4" fill="#93a2fb"/>
-  <circle cx="19.6" cy="12" r="1.05" fill="#ffffff"/>
-  <circle cx="24.6" cy="12" r="1.05" fill="#ffffff"/>
-  <rect x="7" y="12.5" width="15.5" height="12.5" rx="3.8" fill="url(#botTeamFront)"/>
-  <circle cx="12.1" cy="18.3" r="1.25" fill="#ffffff"/>
-  <circle cx="17.4" cy="18.3" r="1.25" fill="#ffffff"/>
-  <path d="M12.4 21.9h5.1" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
+  <g clip-path="url(#squircle)">
+    <rect x="0" y="0" width="180" height="180" fill="url(#tile)"/>
+    <rect x="75" y="33" width="81" height="61.5" rx="21" fill="#ffffff" fill-opacity="0.41"/>
+    <path d="M150 30.5 154.2 44 168 48.2 154.2 52.5 150 66 145.8 52.5 132 48.2 145.8 44Z" fill="#fac85c"/>
+    <rect x="23.5" y="67" width="97.5" height="67.5" rx="24" fill="#ffffff"/>
+    <circle cx="51" cy="95.5" r="5.75" fill="#2d38ba"/>
+    <circle cx="80" cy="95.5" r="5.75" fill="#2d38ba"/>
+  </g>
 </svg>

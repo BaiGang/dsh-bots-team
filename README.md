@@ -4,17 +4,22 @@
 
 A persistent roster of AI bots in the [DeepSeek Harness](https://github.com/deepseek-ai) sidebar.
 
-Every bot is a real DSH Session backed by its own folder, persona, and conversation history — talk to one like a teammate in a contact list instead of hunting through the session log.
+Every bot is a real DSH Session with one persona, its own folder for the files it produces, and a conversation you reach in a click. The whole team shares a single Workspace, so the sidebar reads like a contact list instead of a pile of untitled chats.
+
+[![latest release](https://img.shields.io/github/v/release/BaiGang/dsh-bots-team?sort=semver&label=release)](https://github.com/BaiGang/dsh-bots-team/releases) [![license](https://img.shields.io/github/license/BaiGang/dsh-bots-team)](LICENSE)
 
 **English** | [中文](README.zh.md)
 
 ```
-┌ Your bot team ───────────────────────── [ + New bot ] ┐
-│ 🧭 Scout        │  🧭 Scout · Researcher   ● Idle     │
-│    Researcher   │  ┌ transcript ────────────────────┐ │
-│ 🛠️ Forge        │  │                                │ │
-│    Builder      │  └────────────────────────────────┘ │
-│ 📊 Ledger       │  [ Message Scout… ]          [Send]  │
+┌ Bot team ────────────────────────────── [ + New bot ] ┐
+├─────────────────┬─────────────────────────────────────┤
+│ 🧭 Scout        │  Scout · Researcher        ● Idle   │
+│    Researcher   │  ─────────────────────────────────  │
+│ 🛠️ Forge        │  …messages…                         │
+│    Builder      │                                     │
+│ 📊 Ledger       │  [ Message Scout… ]      [Send]     │
+├───────────────────────────────────────────────────────┤
+│ 2 proposals waiting              [ Dispatch all (2) ] │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -51,16 +56,18 @@ A delivery that could not start — usually because a bot has no conversation ye
 
 ## Features
 
-- **Sidebar integration** — Adds a global **Team** icon (two bot heads) to the left sidebar and opens the roster view in the main column.
+- **Sidebar integration** — Adds a global **Team** entry to the left sidebar — two chat bubbles and a small spark for the chief — and opens the roster view in the main column.
 - **A chief of staff** — a built-in bot, pinned first in the roster, that decomposes a request and proposes assignments. Fired by accident, it is hired again on the next start, and its folder keeps the conversation.
 - **A confirmation gate** — proposals wait in the panel until you dispatch them; the sidebar entry shows how many are waiting, and each dispatch lands in the target bot's own session.
 - **Named in the sidebar** — one **Bot team** Workspace holds every bot conversation, each titled with its bot's name, instead of an untitled chat in an ungrouped bucket.
 - **Live roster** — Displays each bot's avatar, name, role, and real-time working/idle indicator. Auto-refreshes while open, so bots hired from other windows or chats appear automatically.
 - **Inline chat** — Includes a message transcript that renders Markdown (headings, lists, tables, fenced code, quotes, links) as real elements — never as injected HTML — plus tool-call chips, a live status indicator, and a composer wired into the underlying DSH Session.
-- **Lazy session startup** — A bot's Session is created on its first message inside its dedicated folder, ensuring `AGENTS.md` instructions are loaded before its first turn.
+- **Lazy session startup** — a bot's conversation is created on its first message, inside the shared Workspace and titled with the bot's name. No folder setup before a bot can work.
 - **Built-in role templates** — Ships with **Scout** (Researcher), **Forge** (Builder), **Ledger** (Analyst), and **Quill** (Writer). Three starter bots are pre-hired on first launch.
 - **Start a bot over** — archives the conversation a bot owns and clears the binding, so the next message opens a fresh conversation in the team workspace; the old one stays recoverable in the session archive.
 - **Agent-manageable** — Built-in agent tools let any DSH chat hire, brief, or fire bots conversationally.
+- **Reads in any theme** — every colour comes from a DSH theme token, so the panel is legible in light and dark mode alike.
+- **Send the whole queue at once** — **Dispatch all** delivers every waiting proposal in one click, and failed rows stay put with their reason and a **Retry**.
 - **Bilingual UI** — Supports English and Simplified Chinese (`简体中文`), automatically matching your DSH locale.
 
 ## Team Recipes
@@ -115,9 +122,10 @@ You can customize the storage directory in your plugin configuration:
 
 1. Click **Team** in the left sidebar.
 2. Select a starter bot, or click **+ New bot** to create one from a template.
-3. Send a message. The first message initializes the bot's Session in its folder; subsequent messages continue the same thread.
+3. Send a message. The first message opens the bot's conversation in the team Workspace; later messages continue the same thread.
 4. Click **Open chat** anytime to jump into the full DSH session view in the main column.
-5. Click **Edit** to update a bot's name, emoji, role, or instructions (`AGENTS.md` updates immediately for the next turn).
+5. Click **Edit** to change a bot's name, emoji, role, or persona — the text is written to its `AGENTS.md` and used from the next turn on.
+6. **Start a new conversation** in the same editor archives the current conversation and gives the bot a clean slate; nothing is deleted.
 
 ## Agent Tools
 
@@ -137,6 +145,7 @@ Other agents in DSH can inspect and manage your roster programmatically:
 ## Data & Storage
 
 - **Roster manifest:** `$DSH_HOME/bots-team/team.json` (defaults to `~/.dsh/bots-team/team.json`), which also holds the last 100 assignment records.
+- **Team Workspace:** the roster directory itself is registered as one Workspace named **Bot team**; every bot conversation is a Session inside it, titled with the bot's name.
 - **Bot workspaces:** `$DSH_HOME/bots-team/bots/<bot-id>/`, each containing `AGENTS.md` and a `.git` root marker.
 - **API transport:** The browser panel communicates with the host backend over the loopback endpoint `/bots-team/api`.
 
@@ -151,8 +160,9 @@ Other agents in DSH can inspect and manage your roster programmatically:
 | [`cordis.patch.yml`](cordis.patch.yml) | Bundle patch that registers the host plugin row. |
 | [`locale/`](locale) | Localized plugin metadata (titles, descriptions, and detail doc paths). |
 | [`docs/DETAIL.md`](docs/DETAIL.md) | Plugin overview displayed inside the DSH Plugin Manager. |
-| [`assets/`](assets) | Storefront tile for the plugin catalog, and the framed SVG it is rendered from. |
-| [`test/smoke.mjs`](test/smoke.mjs) | Headless test suite (24 checks covering both host and client). |
+| [`assets/`](assets) | Storefront tile (`icon-180.png`) and the SVG it is rendered from (`tile.svg`). |
+| [`icon.svg`](icon.svg) | Plugin icon, resolved through the `./icon` export. |
+| [`test/smoke.mjs`](test/smoke.mjs) | Headless test suite (49 checks covering both host and client). |
 
 **Zero external dependencies:** The host backend uses only Node.js built-ins so it runs cleanly across any DSH profile. The browser client imports only React from DSH's runtime module table.
 
@@ -161,20 +171,21 @@ Other agents in DSH can inspect and manage your roster programmatically:
 Run the smoke test suite:
 
 ```sh
-node test/smoke.mjs      # runs 24 checks; exits non-zero on failure
+node test/smoke.mjs      # runs 49 checks; exits non-zero on failure
 ```
 
-The test suite exercises the HTTP routes via mocked Node request/response pairs, verifies CRUD operations and all four agent tools against a temporary directory, and loads `client.js` through a `__ModuleLoader__` stub with a lightweight React shim to assert component trees and data flow — no browser required.
+The suite drives the HTTP routes through mocked Node request/response pairs, exercises the roster operations and all six agent tools against a temporary directory, and loads `client.js` through a `__ModuleLoader__` stub with a lightweight React shim to assert rendered output and data flow — no browser required. It also pins the things that broke before: a cleared Session binding cannot be resurrected by a stale snapshot, a persona never reaches a Session outside the roster, and no brand-filled control may hardcode a white label.
 
 ## Known Limitations
 
 - **One shared working directory:** every bot Session runs in the roster directory, so a bot that changes its own working directory leaves the group.
 - **Requires HTTP loopback:** Desktop shells serving the UI over `file://` cannot reach `/bots-team/api` (the panel displays an explicit notice in this environment).
 - **Profile-scoped:** One roster is shared across the active DSH profile rather than scoped per project.
-- **Single thread per bot:** Each bot maintains one continuous conversation. Starting fresh requires hiring a new bot, while conversation forking must be done from the main session list.
+- **Single thread per bot:** Each bot keeps one conversation. **Start a new conversation** archives it and opens a fresh one; forking still has to happen from the main session list.
 - **Shared model config:** Bots inherit the active profile's model; per-bot model overrides are not yet supported.
-- **Manual session cleanup:** Removing a bot from the roster does not delete or archive its underlying Session in DSH's main session list.
-- **A bot needs a conversation before it can be dispatched to:** the panel creates and binds one on the first dispatch, and a bot nobody has opened yet fails with that reason rather than silently doing nothing.
+- **Firing does not archive:** removing a bot leaves its Session in DSH's list. Only **Start a new conversation** archives one, and the archive is recoverable.
+- **Older conversations stay put:** a Session created before the shared Workspace keeps its own working directory and cannot join the group.
+- **A bot needs a conversation before it can be dispatched to:** the panel creates and binds one on the first dispatch. If that fails, the queue keeps the row with the reason and a **Retry**.
 - **Completion is polled, not pushed:** the panel notices a finished assignment on its next refresh and shows a short notice; there is no notification outside the panel yet.
 
 ## License
