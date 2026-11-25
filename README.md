@@ -11,17 +11,23 @@ Every bot is a real DSH Session with one persona, its own folder for the files i
 **English** | [中文](README.zh.md)
 
 ```
-┌ Bot team ────────────────────────────── [ + New bot ] ┐
-├─────────────────┬─────────────────────────────────────┤
-│ 🧭 Scout        │  Scout · Researcher        ● Idle   │
-│    Researcher   │  ─────────────────────────────────  │
-│ 🛠️ Forge        │  …messages…                         │
-│    Builder      │                                     │
-│ 📊 Ledger       │  [ Message Scout… ]      [Send]     │
-├───────────────────────────────────────────────────────┤
-│ 2 proposals waiting              [ Dispatch all (2) ] │
-└───────────────────────────────────────────────────────┘
+┌ Your bot team ──────────────────────────────────────── [ New bot ] ┐
+├────────────────┬───────────────────────────────────────────────────┤
+│ 🧭 Scout       │ The chief's proposals (2)    [ Dispatch all (2) ] │
+│    Researcher  │ Nothing is sent yet.              [ Dismiss all ] │
+│ 🛠️ Forge       │ Scout                         [Dispatch] [Cancel] │
+│    Builder     │  research OMDb quotas, write a brief              │
+│ 📊 Ledger      │ Forge                         [Dispatch] [Cancel] │
+│    Analyst     │  build a runnable prototype                       │
+│                │                                                   │
+│                │ Scout · Researcher                         ● Idle │
+│                │ [ Assign a task ]  [ Edit ]  [ Open chat ]        │
+│                │ … transcript …                                    │
+│                │ [ Message Scout… ]                       [ Send ] │
+└────────────────────────────────────────────────────────────────────┘
 ```
+
+*A sketch of the panel, not a pixel spec: the roster on the left, the chief's proposals on top of the conversation, the composer at the bottom.*
 
 ## Why?
 
