@@ -279,10 +279,14 @@ class TeamStore {
       role: text(raw.role, existing?.role ?? '', 60),
       color: color(raw.color, existing?.color ?? '#5b8def'),
       persona: personaText(raw.persona) || existing?.persona || '',
-      folder: existing?.folder ?? path.join(this.botsDir, id),
-      sessionId: typeof existing?.sessionId === 'string' ? existing.sessionId : null,
+      // A stored record is a record, not a patch: reading `existing` alone here
+      // dropped every Session binding on reload.
+      folder: text(raw.folder, existing?.folder ?? '', 400) || path.join(this.botsDir, id),
+      sessionId: typeof raw.sessionId === 'string' && raw.sessionId !== ''
+        ? raw.sessionId
+        : (typeof existing?.sessionId === 'string' && existing.sessionId !== '' ? existing.sessionId : null),
       chief: existing?.chief === true || raw?.chief === true,
-      createdAt: existing?.createdAt ?? Date.now(),
+      createdAt: Number(raw.createdAt) || existing?.createdAt || Date.now(),
       updatedAt: Date.now(),
     }
   }
@@ -487,7 +491,7 @@ class TeamStore {
    * @returns The updated record.
    */
   async dispatch(id) {
-    const record = await this.findAssignment(id, ['proposed'])
+    const record = await this.findAssignment(id, ['proposed', 'failed'])
     const bot = this.state?.bots.find(candidate => candidate.id === record.botId)
     try {
       if (this.deliver === undefined) throw new Error('dispatch is unavailable in this profile')
@@ -503,6 +507,31 @@ class TeamStore {
   }
 
   /**
+   * Deliver every open proposal. One unreachable bot settles itself as failed
+   * and the rest still go out.
+   * @returns The records after delivery.
+   */
+  async dispatchAll() {
+    await this.load()
+    const open = (this.state?.assignments ?? []).filter(record => record.status === 'proposed')
+    const results = []
+    for (const record of open) results.push(await this.dispatch(record.id))
+    return results
+  }
+
+  /**
+   * Drop every open proposal without sending it.
+   * @returns The records after cancellation.
+   */
+  async cancelAll() {
+    await this.load()
+    const open = (this.state?.assignments ?? []).filter(record => record.status === 'proposed')
+    const results = []
+    for (const record of open) results.push(await this.settle(record.id, 'cancelled'))
+    return results
+  }
+
+  /**
    * Record a proposal and deliver it immediately (the panel's own click is the
    * confirmation).
    * @param botId - bot identity.
@@ -512,6 +541,23 @@ class TeamStore {
   async assignNow(botId, task) {
     const [record] = await this.propose([{ botId, task }], 'panel')
     return this.dispatch(record.id)
+  }
+
+  /**
+   * Put a failed assignment back in the queue so it can be dispatched again.
+   * @param id - assignment identity.
+   * @returns The updated record.
+   */
+  async reopen(id) {
+    await this.findAssignment(id, ['failed'])
+    return this.mutate(async (state) => {
+      const record = state.assignments.find(candidate => candidate.id === String(id))
+      record.status = 'proposed'
+      record.error = ''
+      record.finishedAt = null
+      await this.write(state)
+      return record
+    })
   }
 
   /**
@@ -670,6 +716,16 @@ async function dispatchRequest(request, store) {
       else if (op === 'dispatch') result = { assignment: await store.dispatch(String(body.assignmentId ?? '')) }
       else if (op === 'assign') result = { assignment: await store.assignNow(String(body.botId ?? ''), String(body.task ?? '')) }
       else if (op === 'cancel') result = { assignment: await store.cancel(String(body.assignmentId ?? '')) }
+      else if (op === 'dispatchAll') {
+        const dispatched = await store.dispatchAll()
+        result = {
+          dispatched,
+          sent: dispatched.filter(record => record.status === 'sent').length,
+          failed: dispatched.filter(record => record.status === 'failed').length,
+        }
+      }
+      else if (op === 'cancelAll') result = { cancelled: await store.cancelAll() }
+      else if (op === 'reopen') result = { assignment: await store.reopen(String(body.assignmentId ?? '')) }
       else return reply(400, { ok: false, error: `unknown op "${op}"` })
       return reply(200, { ok: true, ...result, state: store.snapshot() })
     }

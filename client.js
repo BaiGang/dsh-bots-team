@@ -70,6 +70,7 @@ window.__ModuleLoader__.load({
       proposals: 'Proposals from the chief',
       proposalsHint: 'Nothing is sent until you dispatch it.',
       dispatch: 'Dispatch',
+      retry: 'Retry',
       dismiss: 'Dismiss',
       assign: 'Assign a task',
       assignHint: 'This arrives as a message in {name}\'s own conversation.',
@@ -78,6 +79,13 @@ window.__ModuleLoader__.load({
       dismissed: 'Proposal dismissed',
       unattendedOn: 'Unattended',
       finished: '{name} finished',
+      dispatchAll: 'Dispatch all ({n})',
+      dispatchedMany: '{n} dispatched',
+      dismissAll: 'Dismiss all',
+      dismissedMany: '{n} proposals dismissed',
+      noticePill: '{n} proposals waiting',
+      noticePillOne: '1 proposal waiting',
+      review: 'Review',
       pendingMany: '{n} proposals to confirm',
       pendingOne: '1 proposal to confirm',
     }
@@ -128,6 +136,7 @@ window.__ModuleLoader__.load({
       proposals: '参谋长的派单建议',
       proposalsHint: '你点派发之前，什么都不会发出去。',
       dispatch: '派发',
+      retry: '重试',
       dismiss: '取消',
       assign: '派单',
       assignHint: '这条任务会作为消息进入 {name} 自己的会话。',
@@ -136,6 +145,13 @@ window.__ModuleLoader__.load({
       dismissed: '已取消该建议',
       unattendedOn: '无人值守',
       finished: '{name} 做完了',
+      dispatchAll: '全部派发（{n}）',
+      dispatchedMany: '已派出 {n} 条',
+      dismissAll: '全部取消',
+      dismissedMany: '已取消 {n} 条建议',
+      noticePill: '{n} 条派单等你确认',
+      noticePillOne: '1 条派单等你确认',
+      review: '查看',
       pendingMany: '{n} 条待确认',
       pendingOne: '1 条待确认',
     }
@@ -324,6 +340,13 @@ window.__ModuleLoader__.load({
         return this.snapshot.assignments.filter(record => record.status === 'proposed')
       }
 
+      /** Everything the panel's queue lists: confirmable and retryable rows. */
+      queue() {
+        return this.snapshot.assignments
+          .filter(record => record.status === 'proposed' || record.status === 'failed')
+          .slice(-8)
+      }
+
       /**
        * Show one short message, then clear it.
        * @param text - text to show.
@@ -342,6 +365,9 @@ window.__ModuleLoader__.load({
       async dispatchProposal(id) {
         const record = this.snapshot.assignments.find(candidate => candidate.id === id)
         try {
+          if (record?.status === 'failed') {
+            await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'reopen', assignmentId: id }) })
+          }
           if (record !== undefined) await this.ensureSession(this.bot(record.botId))
           const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'dispatch', assignmentId: id }) })
           this.set({ assignments: body.state?.assignments ?? this.snapshot.assignments, bots: body.state?.bots ?? this.snapshot.bots, notice: '' })
@@ -352,6 +378,55 @@ window.__ModuleLoader__.load({
           this.notify(this.t('dispatched').replace('{name}', record?.botName ?? ''))
         } catch (error) {
           this.set({ notice: `${this.t('dispatch')}: ${String(error?.message ?? error)}` })
+        }
+      }
+
+      /**
+       * Dispatch every open proposal, giving each bot a Session first so a bot
+       * nobody has opened can still receive work.
+       */
+      async dispatchAll() {
+        const pending = this.queue()
+        if (pending.length === 0) return
+        this.set({ dispatching: true, notice: '' })
+        try {
+          for (const record of pending) {
+            try {
+              if (record.status === 'failed') {
+                await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'reopen', assignmentId: record.id }) })
+              }
+              await this.ensureSession(this.bot(record.botId))
+            } catch {
+              // The dispatch below records the reason for this one.
+            }
+          }
+          const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'dispatchAll' }) })
+          this.set({
+            dispatching: false,
+            bots: body.state?.bots ?? this.snapshot.bots,
+            assignments: body.state?.assignments ?? this.snapshot.assignments,
+          })
+          this.notify(this.t('dispatchedMany').replace('{n}', String(body.sent ?? pending.length)))
+          if ((body.failed ?? 0) > 0) {
+            this.set({ notice: `${this.t('dispatch')}: ${this.t('dispatchedMany').replace('{n}', String(body.failed))}` })
+          }
+        } catch (error) {
+          this.set({ dispatching: false, notice: `${this.t('dispatch')}: ${String(error?.message ?? error)}` })
+        }
+      }
+
+      /**
+       * Drop every open proposal.
+       */
+      async dismissAll() {
+        const pending = this.queue()
+        if (pending.length === 0) return
+        try {
+          const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'cancelAll' }) })
+          this.set({ assignments: body.state?.assignments ?? this.snapshot.assignments, notice: '' })
+          this.notify(this.t('dismissedMany').replace('{n}', String(body.cancelled?.length ?? pending.length)))
+        } catch (error) {
+          this.set({ notice: `${this.t('dismiss')}: ${String(error?.message ?? error)}` })
         }
       }
 
@@ -756,29 +831,87 @@ window.__ModuleLoader__.load({
      */
     function Proposals({ controller, snapshot }) {
       const t = controller.t
-      const pending = snapshot.assignments.filter(record => record.status === 'proposed')
+      // Failed deliveries stay visible: the reason is usually "this bot has no
+      // session yet", and retrying is one click once it does.
+      const pending = snapshot.assignments
+        .filter(record => record.status === 'proposed' || record.status === 'failed')
+        .slice(-8)
       if (pending.length === 0) return null
+      const confirming = pending.filter(record => record.status === 'proposed').length
       return h('section', { className: 'bt-proposals', 'aria-label': t('proposals') },
         h('div', { className: 'bt-proposals-head' },
           h('span', { className: 'bt-proposals-title' },
             t('proposals'),
-            h('span', { className: 'bt-count' }, String(pending.length))),
-          h('span', { className: 'bt-proposals-hint' }, t('proposalsHint'))),
-        pending.map(record => h('div', { key: record.id, className: 'bt-proposal' },
+            h('span', { className: 'bt-count' }, String(confirming))),
+          h('span', { className: 'bt-proposals-hint' }, t('proposalsHint')),
+          h('span', { className: 'bt-spacer' }),
+          confirming > 1
+            ? h('button', {
+                type: 'button',
+                className: 'bt-primary bt-dispatch-all',
+                disabled: snapshot.dispatching === true,
+                onClick: () => { void controller.dispatchAll() },
+              }, t('dispatchAll').replace('{n}', String(confirming)))
+            : null,
+          h('button', {
+            type: 'button',
+            className: 'bt-btn',
+            disabled: snapshot.dispatching === true,
+            onClick: () => { void controller.dismissAll() },
+          }, t('dismissAll'))),
+        pending.map(record => h('div', {
+          key: record.id,
+          className: record.status === 'failed' ? 'bt-proposal bt-proposal-failed' : 'bt-proposal',
+        },
           h('div', { className: 'bt-proposal-text' },
             h('span', { className: 'bt-proposal-to' }, record.botName),
-            h('span', { className: 'bt-proposal-task' }, record.task)),
+            h('span', { className: 'bt-proposal-task' }, record.task),
+            record.status === 'failed' && record.error !== ''
+              ? h('span', { className: 'bt-proposal-error' }, record.error)
+              : null),
           h('div', { className: 'bt-proposal-actions' },
             h('button', {
               type: 'button',
               className: 'bt-primary',
               onClick: () => { void controller.dispatchProposal(record.id) },
-            }, t('dispatch')),
+            }, record.status === 'failed' ? t('retry') : t('dispatch')),
             h('button', {
               type: 'button',
               className: 'bt-btn',
               onClick: () => { void controller.dismissProposal(record.id) },
             }, t('dismiss'))))))
+    }
+
+    /**
+     * Frame-wide notice: a proposal is easy to miss while you are reading a
+     * conversation, so the count also lives outside the panel and reopens it.
+     */
+    function ProposalPill(props) {
+      const controller = props.controller
+      const ctx = props.ctx
+      const snapshot = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+      const pending = snapshot.assignments.filter(record => record.status === 'proposed').length
+      if (pending === 0) return null
+      const t = controller.t
+      const label = pending === 1
+        ? t('noticePillOne')
+        : t('noticePill').replace('{n}', String(pending))
+      return h('div', { className: 'bt-pill-layer' },
+        h('button', {
+          type: 'button',
+          className: 'bt-pill',
+          title: t('proposals'),
+          onClick: () => {
+            try {
+              ctx.layout.selectPanel(PANEL_ID)
+            } catch (error) {
+              console.error('[bots-team] could not open the panel', error)
+            }
+          },
+        },
+        h('span', { className: 'bt-pill-count' }, String(pending)),
+        h('span', undefined, label),
+        h('span', { className: 'bt-pill-go' }, '›')))
     }
 
     /** Transcript row. */
@@ -1182,6 +1315,11 @@ window.__ModuleLoader__.load({
 .bt-proposal-to { font-size: 11px; font-weight: 600; color: var(--dsw-alias-brand-primary); }
 .bt-proposal-task { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .bt-proposal-actions { display: flex; gap: 6px; flex: none; }
+.bt-proposal-failed { color: var(--dsw-alias-label-primary); }
+.bt-proposal-error {
+  font-size: 11px; line-height: 1.5; margin-top: 2px;
+  color: var(--dsw-alias-state-error-primary);
+}
 .bt-assign {
   margin: 10px 20px 0; display: flex; flex-direction: column; gap: 6px; flex: none;
 }
@@ -1201,6 +1339,24 @@ window.__ModuleLoader__.load({
   border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent);
   background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
 }
+.bt-dispatch-all { margin-left: auto; }
+.bt-pill-layer {
+  position: fixed; right: 16px; bottom: 16px; z-index: 55; pointer-events: auto;
+  display: flex; justify-content: flex-end;
+}
+.bt-pill {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 8px 12px 8px 10px; border: 0; border-radius: 999px;
+  font: inherit; font-size: 12.5px; font-weight: 500; color: #fff;
+  background: var(--dsw-alias-brand-primary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+}
+.bt-pill:hover { filter: brightness(1.06); }
+.bt-pill-count {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: rgb(255 255 255 / 24%); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+}
+.bt-pill-go { font-size: 15px; line-height: 1; opacity: 0.75; }
 .bt-icon-wrap { position: relative; display: inline-flex; }
 .bt-icon-badge {
   position: absolute; top: -4px; right: -6px; min-width: 13px; height: 13px; padding: 0 3px;
@@ -1246,6 +1402,13 @@ window.__ModuleLoader__.load({
         label: () => t('panel'),
         locale: NS,
       }, props => h(TeamIcon, { ...props, controller }))), 'bots-team: sidebar entry')
+
+      ctx.effect(() => ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+        name: 'shell.overlay',
+        id: 'bots-team.notice',
+        order: 40,
+        locale: NS,
+      }, props => h(ProposalPill, { ...props, controller, ctx }))), 'bots-team: proposal notice')
     }
 
     return { inject, apply }

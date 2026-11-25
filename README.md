@@ -39,11 +39,13 @@ When you create a bot, the host backend writes its instructions directly to `<bo
 Ask the chief for something and it answers with a proposal, not with a claim that work started:
 
 1. The chief calls `team_assign`, which **records** the assignment for each named bot and returns `awaiting-confirmation`. Nothing has been sent.
-2. The Team panel shows those proposals in a queue, and the sidebar entry carries a count badge.
-3. You dispatch one — that click is the confirmation. The task arrives in the target bot's own conversation as a user message, attributed to this plugin, and the bot starts working.
+2. The Team panel lists them in a queue, the sidebar entry carries a count badge, and a small pill follows you across panels — click it to come back.
+3. You dispatch one, or **Dispatch all** to send the whole queue at once — that click is the confirmation. The task arrives in the target bot's own conversation as a user message, attributed to this plugin, and the bot starts working.
 4. When that bot goes idle again, the assignment settles and the panel says so.
 
 You can also dispatch directly: select any bot, press **Assign a task**, and type it. The click is the confirmation, so the chief is not involved.
+
+A delivery that could not start — usually because a bot has no conversation yet — stays in the queue with its reason and a **Retry** button instead of vanishing.
 
 **Unattended mode** is the explicit switch for the case where nobody is watching. Set `unattended: true` and `team_assign` delivers immediately; leave it off and an agent can only propose. The panel shows the mode, so it is always clear which one is in force.
 

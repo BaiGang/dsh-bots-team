@@ -271,6 +271,48 @@ await check('a panel click dispatches directly, and cancel drops a proposal', as
   assert.match(stale.body.error, /cancelled/u)
 })
 
+await check('a failed delivery can be reopened and retried', async () => {
+  const proposed = await wirePost({ op: 'propose', items: [{ botId: 'ledger', task: '需要一个会话。' }] })
+  const id = proposed.body.assignments[0].id
+  const failed = await wirePost({ op: 'dispatch', assignmentId: id })
+  assert.equal(failed.body.assignment.status, 'failed')
+  const reopened = await wirePost({ op: 'reopen', assignmentId: id })
+  assert.equal(reopened.body.assignment.status, 'proposed')
+  assert.equal(reopened.body.assignment.error, '')
+  await wirePost({ op: 'bind', botId: 'ledger', sessionId: 'sess-ledger' })
+  const retried = await wirePost({ op: 'dispatch', assignmentId: id })
+  assert.equal(retried.body.assignment.status, 'sent', 'the same record dispatches after a retry')
+  const bad = await wirePost({ op: 'reopen', assignmentId: id })
+  assert.equal(bad.status, 500)
+  assert.match(bad.body.error, /sent/u)
+})
+
+await check('the whole queue dispatches and cancels in one call', async () => {
+  await wirePost({ op: 'bind', botId: 'forge', sessionId: 'sess-forge' })
+  const loner = await wirePost({ op: 'create', bot: { name: 'Loner', role: 'QA', persona: 'Never opened.' } })
+  const before = delivered.length
+  await wirePost({ op: 'propose', items: [
+    { botId: 'scout', task: 'A 组任务。' },
+    { botId: 'forge', task: 'B 组任务。' },
+    { botId: loner.body.bot.id, task: 'C 组任务。' },
+  ], source: 'chief' })
+  const all = await wirePost({ op: 'dispatchAll' })
+  assert.equal(all.body.dispatched.length, 3)
+  assert.equal(all.body.sent, 2, 'scout and forge have sessions')
+  assert.equal(all.body.failed, 1, 'a bot nobody opened has none')
+  assert.equal(delivered.length, before + 2)
+  const open = (await wire('/bots-team/api/state')).body.state.assignments.filter(record => record.status === 'proposed')
+  assert.equal(open.length, 0, 'dispatchAll leaves nothing proposed')
+
+  await wirePost({ op: 'propose', items: [
+    { botId: 'scout', task: '待取消 1。' },
+    { botId: 'forge', task: '待取消 2。' },
+  ] })
+  const cancelled = await wirePost({ op: 'cancelAll' })
+  assert.equal(cancelled.body.cancelled.length, 2)
+  assert.equal(cancelled.body.state.assignments.filter(record => record.status === 'proposed').length, 0)
+})
+
 await check('team_status reports sessions, live agents, and recent assignments', async () => {
   const status = tools.find(tool => tool.name === 'team_status')
   const report = await status.execute({}, {})
@@ -288,6 +330,23 @@ await check('the standing note names the team and the confirmation gate', async 
   assert.match(text, /Scout/u)
   assert.match(text, /chief of staff/u)
   assert.match(text, /Team panel/u)
+})
+
+await check('a session binding survives a reload', async () => {
+  // Regression: reloading used to rebuild each bot from defaults, which dropped
+  // the bound Session and left a dispatched task with nowhere to go.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-reload-'))
+  const first = new host.TeamStore(dir, () => {})
+  await first.load()
+  await first.bind('scout', 'sess-persisted')
+  const second = new host.TeamStore(dir, () => {})
+  const state = await second.load()
+  const scout = state.bots.find(bot => bot.id === 'scout')
+  assert.equal(scout.sessionId, 'sess-persisted')
+  assert.equal(scout.folder, path.join(dir, 'bots/scout'))
+  assert.ok(scout.createdAt > 0)
+  assert.equal(state.bots[0].id, 'chief', 'the chief still leads after a reload')
+  await rm(dir, { recursive: true, force: true })
 })
 
 await check('survives a corrupt roster file', async () => {
@@ -611,6 +670,104 @@ await check('a settled assignment is reported with its own wording', async () =>
   assert.match(controller.getSnapshot().toast, /Scout finished/u)
   assert.equal(controller.getSnapshot().assignments[0].status, 'done')
   controller.set({ assignments: [], toast: '' })
+})
+
+await check('a failed proposal stays in the queue with its reason and a retry', async () => {
+  controller.set({
+    assignments: [{ id: 'f1', botId: 'scout', botName: 'Scout', task: '需要会话。', status: 'failed', error: 'Scout has no session yet' }],
+  })
+  const nodes = render()
+  assert.ok(nodes.some(node => String(node?.props?.className ?? '').includes('bt-proposal-failed')), 'the row is marked failed')
+  const reason = nodes.find(node => node?.props?.className === 'bt-proposal-error')
+  assert.equal(reason.props.children, 'Scout has no session yet')
+  const retry = nodes.find(node => node?.props?.className === 'bt-primary' && node.props.children === 'Retry')
+  assert.ok(retry, 'a failed row offers a retry')
+
+  const calls = []
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body)
+    calls.push(body.op)
+    if (body.op === 'reopen') {
+      return { ok: true, status: 200, json: async () => ({ ok: true, assignment: { id: 'f1', status: 'proposed' }, state: { assignments: [] } }) }
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        assignment: { id: 'f1', status: 'sent' },
+        state: { bots: controller.getSnapshot().bots, assignments: [{ id: 'f1', botId: 'scout', botName: 'Scout', task: '需要会话。', status: 'sent' }] },
+      }),
+    }
+  }
+  await controller.dispatchProposal('f1')
+  assert.deepEqual(calls, ['reopen', 'dispatch'], 'a retry reopens first, then dispatches')
+  assert.equal(controller.getSnapshot().assignments[0].status, 'sent')
+})
+
+await check('the panel dispatches every proposal at once', async () => {
+  const virgoBot = { id: 'virgo2', name: 'Virgo', emoji: '🛰️', role: 'Spotter', color: '#5b8def', persona: 'Watch.', folder: path.join(dataDir, 'bots/virgo2'), sessionId: null }
+  controller.set({
+    bots: [...controller.getSnapshot().bots, virgoBot],
+    assignments: [
+      { id: 'q1', botId: 'scout', botName: 'Scout', task: 'one', status: 'proposed' },
+      { id: 'q2', botId: 'virgo2', botName: 'Virgo', task: 'two', status: 'proposed' },
+    ],
+  })
+  const nodes = render()
+  const allButton = nodes.find(node => node?.props?.className === 'bt-primary bt-dispatch-all')
+  assert.ok(allButton, 'more than one proposal offers a batch dispatch')
+  assert.equal(allButton.props.children, 'Dispatch all (2)')
+
+  const calls = []
+  globalThis.fetch = async (url, init) => {
+    const body = init?.body === undefined ? {} : JSON.parse(init.body)
+    calls.push(body.op ?? 'GET')
+    if (body.op === 'bind') {
+      return { ok: true, status: 200, json: async () => ({ ok: true, bot: { ...virgoBot, sessionId: 'sess-virgo' }, state: { bots: controller.getSnapshot().bots } }) }
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        sent: 2,
+        failed: 0,
+        dispatched: [],
+        state: {
+          bots: controller.getSnapshot().bots,
+          assignments: [
+            { id: 'q1', botId: 'scout', botName: 'Scout', task: 'one', status: 'sent' },
+            { id: 'q2', botId: 'virgo2', botName: 'Virgo', task: 'two', status: 'sent' },
+          ],
+        },
+      }),
+    }
+  }
+  controller.ctx.sessions.create = async () => 'sess-virgo'
+  await controller.dispatchAll()
+  assert.equal(calls.filter(op => op === 'bind').length, 1, 'only the session-less bot is bound')
+  assert.ok(calls.includes('dispatchAll'))
+  assert.equal(controller.getSnapshot().assignments.filter(record => record.status === 'proposed').length, 0)
+  assert.match(controller.getSnapshot().toast, /2 dispatched/u)
+})
+
+await check('the frame-wide notice opens the panel and disappears when empty', async () => {
+  const overlay = registrations.find(entry => entry.options.name === 'shell.overlay')
+  assert.ok(overlay, 'a shell.overlay registration should exist so proposals are visible outside the panel')
+  controller.set({ assignments: [{ id: 'z1', botId: 'scout', botName: 'Scout', task: 'z', status: 'proposed' }] })
+  let selected
+  // The registered component is the wrapper that closes over apply()'s context,
+  // so the spy belongs on that context's layout service.
+  clientCtx.layout.selectPanel = (id) => { selected = id }
+  const nodes = walk(overlay.component({ controller }))
+  const pill = nodes.find(node => node?.props?.className === 'bt-pill')
+  assert.ok(pill, 'the pill renders while something is pending')
+  assert.equal(nodes.find(node => node?.props?.className === 'bt-pill-count').props.children, '1')
+  pill.props.onClick()
+  assert.equal(selected, 'bots-team', 'clicking the pill opens the team panel')
+  controller.set({ assignments: [] })
+  assert.equal(walk(overlay.component({ controller })).length, 0, 'nothing renders when the queue is empty')
 })
 
 await check('the sidebar icon draws without a background tile', async () => {

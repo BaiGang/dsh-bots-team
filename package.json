@@ -1,6 +1,6 @@
 {
   "name": "dsh-bots-team",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "A team of AI bots in the DeepSeek Harness left sidebar: every bot is a DSH Session with its own folder and persona, led by a chief of staff that hands work out.",
   "license": "MIT",
