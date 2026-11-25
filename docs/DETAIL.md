@@ -32,6 +32,22 @@ Three starter bots (Scout, Forge, Ledger) are created on first run so the panel
 opens as a team rather than a blank page. Delete them if you would rather start
 empty.
 
+## Teams to start from
+
+The three starters are placeholders; a roster earns its keep when the jobs are
+yours. Two shapes worth copying:
+
+- **Research desk** — *Reviewer* (审稿人) reads like a hostile but fair referee;
+  *Replicator* (实验复现) re-runs the method in its folder and says exactly what
+  reproduces; *Librarian* (论文检索) returns short briefs with links.
+- **Shipping desk** — *Builder* writes the smallest working change and proves it;
+  *Reviewer* reads the diff before it ships; *Operator* reproduces failures from
+  the logs.
+
+Hiring them takes one sentence in a chat (*"hire a reviewer bot that reads like a
+hostile but fair referee"*), or **New bot** in the panel with a name, role, and
+persona. The persona is what the bot follows, and it can be rewritten any time.
+
 ## What the agent sees
 
 The Host half also registers four tools, so an agent can manage the same roster:

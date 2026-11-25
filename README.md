@@ -18,6 +18,32 @@ conversation — talk to one like a contact instead of hunting the session list.
 └───────────────────────────────────────────────────────┘
 ```
 
+## Team shapes to copy
+
+You do not have to design a roster from scratch. Two shapes work well, and you can
+edit either into your own after one conversation.
+
+**Research desk** — a paper or an experiment goes in, a reviewed judgement comes out:
+
+| Bot | Role | Persona you can paste |
+|---|---|---|
+| Reviewer | 审稿人 | Read like a hostile but fair referee: is the claim supported by the evidence, is the baseline fair, what would falsify this? |
+| Replicator | 实验复现 | Re-run the method in your folder, on the data you have, and report exactly what reproduces and what does not, with the command that shows it. |
+| Librarian | 论文检索 | Find related work, read it, and return a short brief with links: what is new, what is contested, what to read next. |
+
+**Shipping desk** — code and operations:
+
+| Bot | Role | Persona you can paste |
+|---|---|---|
+| Builder | 实现 | Write the smallest working change, run it, and report the command that proves it. |
+| Reviewer | 评审 | Read the diff before it ships: correctness, tests that would have caught the bug, anything that breaks a caller. |
+| Operator | 运维 | Watch what runs, reproduce failures from the logs, and hand back a fix or a precise question. |
+
+Create them in the panel (**New bot**, then type the role and persona), or just ask
+in a chat: *"hire a reviewer bot that reads like a hostile but fair referee, and a
+librarian that returns briefs with links"*. Names, emoji, and roles are yours —
+the persona is what the bot actually follows, and you can rewrite it any time.
+
 ## Why
 
 DSH already runs agents well. What a chat-shaped team adds is a place to keep them:

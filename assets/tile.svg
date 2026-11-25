@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="4.9 2.7 26.0 26.0">
+  <rect x="4.9" y="2.7" width="26.0" height="26.0" fill="#f3f5ff"/>
+<defs>
+    <linearGradient id="botTeamFront" x1="7" y1="12.5" x2="22.5" y2="25" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5b76ff"/>
+      <stop offset="1" stop-color="#3c53d9"/>
+    </linearGradient>
+  </defs>
+  <rect x="15.6" y="6.4" width="13.2" height="11.2" rx="3.4" fill="#93a2fb"/>
+  <circle cx="19.6" cy="12" r="1.05" fill="#ffffff"/>
+  <circle cx="24.6" cy="12" r="1.05" fill="#ffffff"/>
+  <rect x="7" y="12.5" width="15.5" height="12.5" rx="3.8" fill="url(#botTeamFront)"/>
+  <circle cx="12.1" cy="18.3" r="1.25" fill="#ffffff"/>
+  <circle cx="17.4" cy="18.3" r="1.25" fill="#ffffff"/>
+  <path d="M12.4 21.9h5.1" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
+</svg>
