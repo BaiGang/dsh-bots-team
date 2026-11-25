@@ -486,6 +486,31 @@ class TeamStore {
   }
 
   /**
+   * Give a bot a conversation without sending it anything: create the Session in
+   * the team Workspace, bind it, and let `organize` name and file it. The panel
+   * does this through `sessions.create`; this path exists for callers that only
+   * have the Host (a dispatch from an agent, a script, a test).
+   * @param botId - bot identity.
+   * @returns The bot with a Session bound.
+   */
+  async openSession(botId) {
+    await this.load()
+    const bot = this.state?.bots.find(candidate => candidate.id === botId)
+    if (bot === undefined) throw new Error(`unknown bot "${botId}"`)
+    if (typeof bot.sessionId === 'string' && bot.sessionId !== '') return bot
+    if (this.agents === undefined || typeof this.agents.create !== 'function') {
+      throw new Error('this profile cannot create a Session from the Host')
+    }
+    const sessionId = `session-${randomUUID()}`
+    const handle = await this.agents.create({ sessionId, meta: { cwd: this.root } })
+    if (handle === undefined) throw new Error('the agent factory returned no handle')
+    await this.bind(botId, sessionId)
+    // `bind` runs `organize`, which persists the title and the grouping; hand back
+    // the record as stored rather than the pre-organize copy.
+    return this.state?.bots.find(candidate => candidate.id === botId) ?? bot
+  }
+
+  /**
    * Start a bot over: archive the conversation it owns and clear the binding, so
    * the next message creates a fresh Session in the team Workspace. The archived
    * conversation stays recoverable in the session archive.
@@ -882,6 +907,7 @@ async function dispatchRequest(request, store) {
       else if (op === 'cancelAll') result = { cancelled: await store.cancelAll() }
       else if (op === 'reopen') result = { assignment: await store.reopen(String(body.assignmentId ?? '')) }
       else if (op === 'restart') result = { bot: await store.restart(String(body.botId ?? '')) }
+      else if (op === 'open') result = { bot: await store.openSession(String(body.botId ?? '')) }
       else return reply(400, { ok: false, error: `unknown op "${op}"` })
       return reply(200, { ok: true, ...result, state: store.snapshot() })
     }

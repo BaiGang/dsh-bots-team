@@ -39,6 +39,7 @@ const delivered = []
 const workspaces = []
 const titles = new Map()
 const liveSessions = new Set(['sess-scout'])
+const created = []
 const archived = []
 let releaseIdle = () => {}
 const fakeAgent = (sessionId) => {
@@ -63,6 +64,11 @@ const hostCtx = {
   agents: {
     get: sessionId => agents.get(sessionId),
     resume: async ({ resumeSessionId }) => ({ agent: fakeAgent(resumeSessionId) }),
+    create: async (options) => {
+      created.push(options)
+      liveSessions.add(options.sessionId)
+      return { session: { id: options.sessionId } }
+    },
   },
   systemPrompt: {
     section: (section) => { sections.push(section); return () => {} },
@@ -341,6 +347,24 @@ await check('the whole queue dispatches and cancels in one call', async () => {
   const cancelled = await wirePost({ op: 'cancelAll' })
   assert.equal(cancelled.body.cancelled.length, 2)
   assert.equal(cancelled.body.state.assignments.filter(record => record.status === 'proposed').length, 0)
+})
+
+await check('a bot with no session can be given a conversation without a task', async () => {
+  const hired = await wirePost({ op: 'create', bot: { name: 'Waiter', role: 'Waiter', persona: 'Wait for work.' } })
+  const quiet = hired.body.bot.id
+  const before = created.length
+  const opened = await wirePost({ op: 'open', botId: quiet })
+  assert.equal(opened.status, 200, JSON.stringify(opened.body))
+  const bot = opened.body.bot
+  assert.match(bot.sessionId, /^session-/u)
+  assert.equal(bot.organized, true, 'the new conversation is titled and filed')
+  assert.equal(created.length, before + 1)
+  const workspacePath = (await wire('/bots-team/api/state')).body.state.workspacePath
+  assert.equal(created.at(-1).meta.cwd, workspacePath, 'created in the team Workspace')
+  // Opening twice must not create a second conversation.
+  const again = await wirePost({ op: 'open', botId: quiet })
+  assert.equal(again.body.bot.sessionId, bot.sessionId)
+  assert.equal(created.length, before + 1)
 })
 
 await check('starting a bot over archives its conversation and clears the binding', async () => {
