@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Bot team",
+    "description": "A roster of AI bots in the left sidebar. Each bot is a real DSH session with its own folder, its own AGENTS.md persona, and its own conversation you can send messages to.",
+    "detail": "docs/DETAIL.md"
+  }
+}

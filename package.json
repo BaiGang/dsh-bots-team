@@ -1,0 +1,58 @@
+{
+  "name": "@local/bot-team",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A team of AI bots in the DeepSeek Harness left sidebar: every bot is a DSH Session with its own folder and persona.",
+  "license": "MIT",
+  "author": "BaiGang",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "ai-agents",
+    "chat"
+  ],
+  "homepage": "https://github.com/BaiGang/dsh-bot-team#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BaiGang/dsh-bot-team.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BaiGang/dsh-bot-team/issues"
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "test",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  }
+}
