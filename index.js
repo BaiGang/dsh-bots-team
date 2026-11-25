@@ -200,7 +200,9 @@ class TeamStore {
    */
   mutate(operation) {
     const run = this.queue.then(async () => {
-      const state = await this.load()
+      // Disk is the truth: a mutation never writes a snapshot it loaded earlier.
+      const state = await this.readState()
+      this.state = state
       return operation(state)
     })
     // A failed mutation must not poison the queue for later calls.
@@ -219,9 +221,23 @@ class TeamStore {
     return this.loading
   }
 
-  /** The body of {@link load}. */
+  /** The body of {@link load}: read, seed when empty, then persist and prepare folders. */
   async readOrSeed() {
-    await mkdir(this.botsDir, { recursive: true })
+    const state = await this.readState()
+    this.state = state
+    await this.write(state)
+    for (const bot of state.bots) await this.ensureFolder(bot)
+    return state
+  }
+
+  /**
+   * Read the roster from disk without writing anything: the truth a mutation
+   * must start from. Long work such as resuming an agent can outlive the state
+   * it began with, and writing that stale snapshot would resurrect a Session
+   * binding another change had already cleared.
+   * @returns Normalized roster state.
+   */
+  async readState() {
     let parsed
     try {
       parsed = JSON.parse(await readFile(this.file, 'utf8'))
@@ -231,9 +247,6 @@ class TeamStore {
     const state = this.normalize(parsed)
     if (state.bots.length === 0) this.seed(state)
     this.ensureChief(state)
-    this.state = state
-    await this.write(state)
-    for (const bot of state.bots) await this.ensureFolder(bot)
     return state
   }
 

@@ -416,6 +416,32 @@ await check('the standing note names the team and the confirmation gate', async 
   assert.match(text, /Team panel/u)
 })
 
+await check('a stale snapshot cannot resurrect a cleared binding', async () => {
+  // Two instances over one file: the first one works from its cached state and
+  // write from it; the second clears a binding. A later mutation on the first
+  // must not bring the binding back.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-stale-'))
+  const stale = new host.TeamStore(dir, () => {})
+  await stale.load()
+  await stale.bind('scout', 'sess-old')
+
+  const other = new host.TeamStore(dir, () => {})
+  await other.load()
+  await other.bind('scout', '')
+
+  await stale.mutate(async (state) => {
+    const bot = state.bots.find(candidate => candidate.id === 'forge')
+    bot.role = 'Builder'
+    await stale.write(state)
+  })
+
+  const fresh = new host.TeamStore(dir, () => {})
+  const state = await fresh.load()
+  assert.equal(state.bots.find(bot => bot.id === 'scout').sessionId, null, 'the cleared binding stays cleared')
+  assert.equal(state.bots.find(bot => bot.id === 'forge').role, 'Builder', 'and the newer change landed')
+  await rm(dir, { recursive: true, force: true })
+})
+
 await check('a session binding survives a reload', async () => {
   // Regression: reloading used to rebuild each bot from defaults, which dropped
   // the bound Session and left a dispatched task with nowhere to go.
