@@ -28,9 +28,24 @@ survives restarts, and stays readable and editable on disk.
 5. **Edit** changes the name, emoji, role, or instructions. Instructions are
    rewritten to `AGENTS.md` for the next message.
 
-Three starter bots (Scout, Forge, Ledger) are created on first run so the panel
-opens as a team rather than a blank page. Delete them if you would rather start
-empty.
+Four bots exist on first run: **Chief** (chief of staff) pinned first, then the
+starters Scout, Forge, and Ledger. Delete any of them if you would rather start
+empty; the chief is hired again on the next start, with its folder kept.
+
+## Handing work out
+
+The chief takes a request, names the right bot, and calls `team_assign`. That
+call **records** an assignment and sends nothing: it returns
+`awaiting-confirmation`. The panel lists the proposals, the sidebar entry badges
+the count, and your click on **Dispatch** is what delivers the task — it arrives
+in the target bot's own conversation as a user message and the bot starts
+working. When it goes idle, the assignment settles and the panel says so.
+
+Selecting a bot and pressing **Assign a task** dispatches directly; that click is
+its own confirmation.
+
+`unattended: true` is the explicit switch for an unwatched profile: there
+`team_assign` delivers immediately. The default is off.
 
 ## Teams to start from
 
@@ -58,10 +73,13 @@ The host backend also registers four tools, so an agent can manage the same rost
 | `team_hire` | Adds a bot with a name, role, persona, and emoji, and writes its folder. |
 | `team_brief` | Rewrites one bot's persona or role. |
 | `team_fire` | Removes a bot from the roster; its folder stays on disk. |
+| `team_assign` | Records assignments for named bots; delivers them only in unattended mode. |
+| `team_status` | Reports each bot's session, live agent, and recent assignments. |
 
 ## Where the data lives
 
-- Roster: `$DSH_HOME/bots-team/team.json` (`~/.dsh/bots-team/team.json` by default).
+- Roster: `$DSH_HOME/bots-team/team.json` (`~/.dsh/bots-team/team.json` by default),
+  including the last 100 assignment records.
 - Bot folders: `$DSH_HOME/bots-team/bots/<bot-id>/`, each with `AGENTS.md` and a
   `.git` directory that marks the folder as its own instruction root so guidance
   from parent directories does not leak in.
@@ -81,3 +99,7 @@ session are left alone, so a removal is recoverable.
 - A bot owns one conversation. Starting over means deleting the bot and hiring a
   fresh one; forking the conversation is still done from the session list.
 - Deleting a bot does not archive its session; that stays in the session list.
+- A bot needs a session before it can receive work. The panel creates and binds
+  one on the first dispatch; when creation fails the assignment records that
+  reason instead of doing nothing.
+- Completion is noticed on the panel's next refresh, not pushed.

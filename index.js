@@ -1,12 +1,15 @@
 /**
- * DSH Bot Team, host backend: the durable roster of AI bots that the Team panel and the
- * agent tools share.
+ * DSH Bot Team, host backend: the durable roster of AI bots that the Team panel
+ * and the agent tools share, plus the chief of staff's dispatch path.
  *
  * Each bot is a real DSH Session in a folder of its own, and the folder carries
  * the bot's persona as `AGENTS.md`, which `@deepseek-ai/dsh-agent-instructions`
- * already loads into that Session's system prompt. The Host therefore owns only
- * what a browser cannot: the roster file, the bot folders, and a small loopback
- * JSON endpoint the panel reads and writes.
+ * already loads into that Session's system prompt. The host therefore owns only
+ * what a browser cannot: the roster, the bot folders, one loopback JSON
+ * endpoint, and the ability to wake one bot's Session with a task.
+ *
+ * Dispatch is gated: an agent-side call records a proposal, and only the panel's
+ * confirmation (or the explicit `unattended` config) actually delivers it.
  *
  * Deliberately dependency-free: this module imports Node built-ins only, so it
  * resolves whatever profile installs it.
@@ -14,20 +17,23 @@
  * @module dsh-bots-team
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 
 /** Cordis plugin name. */
 export const name = 'bots-team'
-/** The route registry and the tool registry this plugin contributes to. */
-export const inject = ['webServer', 'tools']
+/** Services this plugin contributes to and drives. */
+export const inject = ['webServer', 'tools', 'agents', 'systemPrompt']
 
 /** Route prefix owned by this plugin. */
 const API_PREFIX = '/bots-team/api'
 /** Roster schema version written into `team.json`. */
-const TEAM_VERSION = 1
+const TEAM_VERSION = 2
+/** Identifier of the built-in chief of staff. */
+const CHIEF_ID = 'chief'
+/** How many assignment records are kept. */
+const ASSIGNMENT_LIMIT = 100
 /** Default working posture appended to every persona. */
 const BOT_RULES = [
   '## How you work',
@@ -36,6 +42,23 @@ const BOT_RULES = [
   '- If a task clearly belongs to a teammate, say which bot should take it instead of guessing.',
   '- Prefer doing the work over describing how it could be done. Ask only when a wrong guess would waste real effort.',
 ].join('\n')
+
+/** The built-in chief of staff: it dispatches and reports, it does not do the work. */
+const CHIEF = {
+  name: 'Chief',
+  emoji: '🎖️',
+  role: 'Chief of staff',
+  color: '#6d7c95',
+  persona: [
+    'You are the chief of staff of this bot team. You do not do the work yourself.',
+    'You do three things: turn a request into assignments for the right teammate, hand them over, and report what came back.',
+    '- Name the teammate before the task, and say why that one.',
+    '- Keep a proposal to at most three assignments, and merge work that belongs together.',
+    '- You cannot send work yourself: `team_assign` records a proposal, and the person confirms it in the Team panel. Tell them that plainly once, then stop.',
+    '- Never claim a bot is working, finished, or stuck unless `team_status` says so. When it does not know, say you do not know yet.',
+    '- When several bots are involved, close with one line naming who is doing what.',
+  ].join('\n'),
+}
 
 /** Team presets offered by the panel and by `team_hire`. */
 const TEMPLATES = {
@@ -143,7 +166,7 @@ function renderAgentsMd(bot) {
   return lines.join('\n')
 }
 
-/** Roster file plus bot folders, with serialized writes. */
+/** Roster file, bot folders, and assignment records with serialized writes. */
 class TeamStore {
   /**
    * @param {string} root - directory owning `team.json` and `bots/`.
@@ -157,6 +180,12 @@ class TeamStore {
     this.state = undefined
     this.loading = undefined
     this.queue = Promise.resolve()
+    /** Set by `apply` once an Agent registry is available. */
+    this.deliver = undefined
+    /** In-flight wake-ups, so two dispatches cannot resume one session twice. */
+    this.waking = new Map()
+    /** Set by `apply` from the row configuration. */
+    this.unattended = false
   }
 
   /**
@@ -197,6 +226,7 @@ class TeamStore {
     }
     const state = this.normalize(parsed)
     if (state.bots.length === 0) this.seed(state)
+    this.ensureChief(state)
     this.state = state
     await this.write(state)
     for (const bot of state.bots) await this.ensureFolder(bot)
@@ -217,12 +247,17 @@ class TeamStore {
       if (bot === undefined) continue
       if (seen.has(bot.id)) bot.id = `${bot.id}-${randomUUID().slice(0, 4)}`
       seen.add(bot.id)
+      bot.chief = raw?.chief === true || bot.id === CHIEF_ID
       bots.push(bot)
     }
+    const assignments = (Array.isArray(parsed?.assignments) ? parsed.assignments : [])
+      .filter(record => record !== null && typeof record === 'object' && typeof record.id === 'string')
+      .slice(-ASSIGNMENT_LIMIT)
     return {
       version: TEAM_VERSION,
       team: { name: text(parsed?.team?.name, 'My team', 80), createdAt: Number(parsed?.team?.createdAt) || Date.now() },
       bots,
+      assignments,
     }
   }
 
@@ -246,6 +281,7 @@ class TeamStore {
       persona: personaText(raw.persona) || existing?.persona || '',
       folder: existing?.folder ?? path.join(this.botsDir, id),
       sessionId: typeof existing?.sessionId === 'string' ? existing.sessionId : null,
+      chief: existing?.chief === true || raw?.chief === true,
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     }
@@ -264,10 +300,35 @@ class TeamStore {
         ...template,
         folder: path.join(this.botsDir, key),
         sessionId: null,
+        chief: false,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })
     }
+  }
+
+  /**
+   * Guarantee the chief of staff exists and leads the roster. A person may fire
+   * it; the next activation hires it again so dispatch cannot be lost by
+   * accident, and its folder keeps any conversation it had.
+   */
+  ensureChief(state) {
+    const index = state.bots.findIndex(bot => bot.chief === true || bot.id === CHIEF_ID)
+    if (index !== -1) {
+      const [chief] = state.bots.splice(index, 1)
+      chief.chief = true
+      state.bots.unshift(chief)
+      return
+    }
+    state.bots.unshift({
+      id: CHIEF_ID,
+      ...CHIEF,
+      folder: path.join(this.botsDir, CHIEF_ID),
+      sessionId: null,
+      chief: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
   }
 
   /**
@@ -300,12 +361,15 @@ class TeamStore {
 
   /** Public, client-safe projection of the roster. */
   snapshot() {
-    const state = this.state ?? { version: TEAM_VERSION, team: { name: 'My team', createdAt: 0 }, bots: [] }
+    const state = this.state ?? { version: TEAM_VERSION, team: { name: 'My team', createdAt: 0 }, bots: [], assignments: [] }
     return {
       version: state.version,
       team: { name: state.team.name },
       dataDir: this.root,
+      chiefId: state.bots.find(bot => bot.chief === true)?.id ?? CHIEF_ID,
+      unattended: this.unattended === true,
       bots: state.bots.map(bot => ({ ...bot })),
+      assignments: state.assignments.map(record => ({ ...record })),
       templates: Object.entries(TEMPLATES).map(([id, template]) => ({ id, ...template })),
     }
   }
@@ -322,6 +386,7 @@ class TeamStore {
       if (bot === undefined) throw new Error('a bot needs a name')
       if (state.bots.some(existing => existing.id === bot.id)) bot.id = `${bot.id}-${randomUUID().slice(0, 4)}`
       bot.folder = path.join(this.botsDir, bot.id)
+      bot.chief = false
       state.bots.push(bot)
       await this.write(state)
       await this.ensureFolder(bot)
@@ -341,6 +406,7 @@ class TeamStore {
       if (index === -1) throw new Error(`unknown bot "${botId}"`)
       const bot = this.normalizeBot({ ...state.bots[index], ...input }, state.bots[index])
       if (bot === undefined) throw new Error('a bot needs a name')
+      bot.chief = state.bots[index].chief === true
       state.bots[index] = bot
       await this.write(state)
       await this.ensureFolder(bot)
@@ -376,8 +442,181 @@ class TeamStore {
       if (index === -1) throw new Error(`unknown bot "${botId}"`)
       const [removed] = state.bots.splice(index, 1)
       await this.write(state)
-      return { id: removed.id, folder: removed.folder }
+      return { id: removed.id, folder: removed.folder, chief: removed.chief === true }
     })
+  }
+
+  /**
+   * Record one or more proposed assignments without delivering them.
+   * @param items - `{ botId, task }` records.
+   * @param source - who proposed: `chief`, `agent`, or `panel`.
+   * @returns The created records.
+   */
+  async propose(items, source) {
+    return this.mutate(async (state) => {
+      const created = []
+      for (const item of items) {
+        const bot = state.bots.find(candidate => candidate.id === String(item?.botId ?? ''))
+        if (bot === undefined) throw new Error(`unknown bot "${String(item?.botId ?? '')}"`)
+        const task = text(item?.task, '', 4000)
+        if (task === '') throw new Error('an assignment needs a task')
+        const record = {
+          id: randomUUID().slice(0, 8),
+          botId: bot.id,
+          botName: bot.name,
+          task,
+          status: 'proposed',
+          source: typeof source === 'string' ? source : 'chief',
+          createdAt: Date.now(),
+          sentAt: null,
+          finishedAt: null,
+          error: '',
+        }
+        state.assignments.push(record)
+        created.push(record)
+      }
+      state.assignments = state.assignments.slice(-ASSIGNMENT_LIMIT)
+      await this.write(state)
+      return created
+    })
+  }
+
+  /**
+   * Deliver one proposed assignment into its bot's Session.
+   * @param id - assignment identity.
+   * @returns The updated record.
+   */
+  async dispatch(id) {
+    const record = await this.findAssignment(id, ['proposed'])
+    const bot = this.state?.bots.find(candidate => candidate.id === record.botId)
+    try {
+      if (this.deliver === undefined) throw new Error('dispatch is unavailable in this profile')
+      if (bot === undefined) throw new Error(`unknown bot "${record.botId}"`)
+      if (typeof bot.sessionId !== 'string' || bot.sessionId === '') {
+        throw new Error(`${bot.name} has no session yet; open its chat once, then dispatch`)
+      }
+      await this.deliver(bot, record)
+    } catch (error) {
+      return this.settle(record.id, 'failed', String(error?.message ?? error))
+    }
+    return this.settle(record.id, 'sent')
+  }
+
+  /**
+   * Record a proposal and deliver it immediately (the panel's own click is the
+   * confirmation).
+   * @param botId - bot identity.
+   * @param task - task text.
+   * @returns The record after delivery.
+   */
+  async assignNow(botId, task) {
+    const [record] = await this.propose([{ botId, task }], 'panel')
+    return this.dispatch(record.id)
+  }
+
+  /**
+   * Mark one proposal cancelled.
+   * @param id - assignment identity.
+   * @returns The updated record.
+   */
+  async cancel(id) {
+    await this.findAssignment(id, ['proposed', 'failed'])
+    return this.settle(id, 'cancelled')
+  }
+
+  /**
+   * Resolve one assignment in a required state.
+   * @param id - assignment identity.
+   * @param allowed - statuses this operation accepts.
+   * @returns The record.
+   */
+  async findAssignment(id, allowed) {
+    await this.load()
+    const record = this.state?.assignments.find(candidate => candidate.id === String(id ?? ''))
+    if (record === undefined) throw new Error(`unknown assignment "${String(id ?? '')}"`)
+    if (!allowed.includes(record.status)) throw new Error(`assignment is ${record.status}, not ${allowed.join(' or ')}`)
+    return record
+  }
+
+  /**
+   * Persist one status transition.
+   * @param id - assignment identity.
+   * @param status - next status.
+   * @param error - failure reason for `failed`.
+   * @returns The updated record.
+   */
+  settle(id, status, error) {
+    return this.mutate(async (state) => {
+      const record = state.assignments.find(candidate => candidate.id === id)
+      if (record === undefined) throw new Error(`unknown assignment "${id}"`)
+      record.status = status
+      if (status === 'sent') record.sentAt = Date.now()
+      if (status === 'done' || status === 'failed' || status === 'cancelled') record.finishedAt = Date.now()
+      if (typeof error === 'string' && error !== '') record.error = error
+      await this.write(state)
+      return record
+    })
+  }
+
+  /**
+   * Wake a bot's Session with one task. The message is attributed to this
+   * plugin's own source kind, which consumers fall through as an ordinary user
+   * message, so the bot reads it as an instruction from its owner.
+   * @param bot - target bot with a bound Session.
+   * @param record - assignment being delivered.
+   */
+  async wake(bot, record) {
+    const sessionId = bot.sessionId
+    let agent = this.agentFor(sessionId)
+    if (agent === undefined) {
+      const pending = this.waking.get(sessionId)
+      const handle = pending ?? this.resume(sessionId)
+      this.waking.set(sessionId, handle)
+      try {
+        agent = await handle
+      } finally {
+        if (this.waking.get(sessionId) === handle) this.waking.delete(sessionId)
+      }
+    }
+    if (agent === undefined || typeof agent.followup !== 'function') {
+      throw new Error(`could not wake ${bot.name}`)
+    }
+    agent.followup({
+      role: 'user',
+      id: randomUUID(),
+      content: [{ type: 'text', text: record.task }],
+      source: { kind: 'team-assign' },
+    })
+    // A dispatched task settles when the bot stops working; waiting never blocks
+    // the caller, and a completion is recorded for the panel to notice.
+    void Promise.resolve(agent.whenIdle?.())
+      .then(() => this.settle(record.id, 'done').catch(() => {}))
+      .catch(error => this.settle(record.id, 'failed', String(error?.message ?? error)).catch(() => {}))
+  }
+
+  /**
+   * Look up one live agent for a session.
+   * @param sessionId - session identity.
+   * @returns The agent, when one is running.
+   */
+  agentFor(sessionId) {
+    try {
+      return this.agents?.get?.(sessionId)
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Resume a persisted Session into a live agent.
+   * @param sessionId - session identity.
+   * @returns The agent.
+   */
+  async resume(sessionId) {
+    const handle = await this.agents.resume({ resumeSessionId: sessionId })
+    const agent = handle?.agent ?? handle
+    if (agent === undefined) throw new Error('resume returned no agent')
+    return agent
   }
 }
 
@@ -386,14 +625,14 @@ class TeamStore {
  *
  * `dispatch` is transport-free so a test can call it directly; `handle` adapts
  * it to the raw Node request pair the web server hands a named route. A named
- * route's `resource` form only sees GET and HEAD, which is why the roster's
- * writes travel through a handler instead.
+ * route's `resource` form only sees GET and HEAD, which is why roster writes and
+ * delivery travel through a handler instead.
  *
  * @param request - method, pathname, header lookup, and raw body text.
  * @param store - roster store.
  * @returns status and JSON body.
  */
-async function dispatch(request, store) {
+async function dispatchRequest(request, store) {
   const route = request.pathname.slice(API_PREFIX.length) || '/state'
   const reply = (status, body) => ({ status, body })
   const header = name => request.header(name) ?? ''
@@ -427,6 +666,10 @@ async function dispatch(request, store) {
       else if (op === 'update') result = { bot: await store.update(String(body.botId ?? ''), body.patch ?? {}) }
       else if (op === 'delete') result = { removed: await store.remove(String(body.botId ?? '')) }
       else if (op === 'bind') result = { bot: await store.bind(String(body.botId ?? ''), body.sessionId) }
+      else if (op === 'propose') result = { assignments: await store.propose(normalizeItems(body), String(body.source ?? 'panel')) }
+      else if (op === 'dispatch') result = { assignment: await store.dispatch(String(body.assignmentId ?? '')) }
+      else if (op === 'assign') result = { assignment: await store.assignNow(String(body.botId ?? ''), String(body.task ?? '')) }
+      else if (op === 'cancel') result = { assignment: await store.cancel(String(body.assignmentId ?? '')) }
       else return reply(400, { ok: false, error: `unknown op "${op}"` })
       return reply(200, { ok: true, ...result, state: store.snapshot() })
     }
@@ -434,6 +677,16 @@ async function dispatch(request, store) {
   } catch (error) {
     return reply(500, { ok: false, error: String(error?.message ?? error) })
   }
+}
+
+/**
+ * Accept either a single item or an `items` list from the panel.
+ * @param body - parsed request body.
+ * @returns Normalized proposals.
+ */
+function normalizeItems(body) {
+  const items = Array.isArray(body?.items) ? body.items : [{ botId: body?.botId, task: body?.task }]
+  return items.map(item => ({ botId: String(item?.botId ?? ''), task: String(item?.task ?? '') }))
 }
 
 /** Largest request body accepted, in bytes. */
@@ -475,7 +728,7 @@ async function handle(req, res, store) {
   }
   try {
     const body = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' ? await readBody(req) : ''
-    const { status, body: payload } = await dispatch({
+    const { status, body: payload } = await dispatchRequest({
       method: req.method ?? 'GET',
       pathname: new URL(req.url ?? '/', 'http://localhost').pathname,
       header: name => req.headers[name],
@@ -490,9 +743,10 @@ async function handle(req, res, store) {
 /**
  * Describe the tools contributed to the calling agent.
  * @param store - roster store.
+ * @param {() => boolean} unattended - whether a proposal may deliver itself.
  * @returns Tool definitions, ready for `ctx.tools.register`.
  */
-function teamTools(store) {
+function teamTools(store, unattended) {
   const textOutput = {
     schema: { type: 'object', additionalProperties: true },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
@@ -501,9 +755,18 @@ function teamTools(store) {
     id: bot.id,
     name: bot.name,
     role: bot.role,
+    chief: bot.chief === true,
     persona: bot.persona,
     folder: bot.folder,
     hasChat: typeof bot.sessionId === 'string',
+  }))
+  const recent = state => state.assignments.slice(-12).map(record => ({
+    id: record.id,
+    botId: record.botId,
+    botName: record.botName,
+    status: record.status,
+    task: record.task.length > 160 ? `${record.task.slice(0, 160)}…` : record.task,
+    error: record.error,
   }))
   return [
     {
@@ -513,7 +776,8 @@ function teamTools(store) {
       output: textOutput,
       async execute() {
         await store.load()
-        return { team: store.snapshot().team.name, bots: summary(store.snapshot().bots) }
+        const state = store.snapshot()
+        return { team: state.team.name, chiefId: state.chiefId, bots: summary(state.bots) }
       },
     },
     {
@@ -576,13 +840,104 @@ function teamTools(store) {
         return { removed }
       },
     },
+    {
+      name: 'team_assign',
+      description: 'Hand work to one or more bots. Records a proposal and returns it; the person confirms in the Team panel unless this profile runs unattended, in which case the task is delivered immediately. The task becomes a user message in the bot\'s own conversation, so write it as an instruction with its acceptance criteria.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          assignments: {
+            type: 'array',
+            description: 'One entry per bot: who gets it, and the task they receive.',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                botId: { type: 'string', description: 'Bot id from team_roster.' },
+                task: { type: 'string', description: 'The instruction the bot receives, including what done looks like.' },
+              },
+              required: ['botId', 'task'],
+            },
+          },
+        },
+        required: ['assignments'],
+      },
+      output: textOutput,
+      async execute(args) {
+        await store.load()
+        const items = (Array.isArray(args.assignments) ? args.assignments : [])
+          .map(item => ({ botId: String(item?.botId ?? ''), task: String(item?.task ?? '') }))
+        if (items.length === 0) throw new Error('team_assign needs at least one assignment')
+        const created = await store.propose(items, 'chief')
+        if (unattended()) {
+          const delivered = []
+          for (const record of created) delivered.push(await store.dispatch(record.id))
+          return { mode: 'unattended', assignments: delivered }
+        }
+        return {
+          mode: 'awaiting-confirmation',
+          assignments: created.map(record => ({ id: record.id, botId: record.botId, botName: record.botName, task: record.task })),
+          note: 'Proposed, not sent. The person confirms these in the Team panel; tell them so and do not claim the work has started.',
+        }
+      },
+    },
+    {
+      name: 'team_status',
+      description: 'Report what every bot is doing right now and the state of recent assignments. Use it before telling anyone that a bot is working, finished, or blocked.',
+      parameters: { type: 'object', additionalProperties: false, properties: {} },
+      output: textOutput,
+      async execute() {
+        await store.load()
+        const state = store.snapshot()
+        const bots = state.bots.map(bot => {
+          const agent = store.agentFor(bot.sessionId)
+          return {
+            id: bot.id,
+            name: bot.name,
+            role: bot.role,
+            chief: bot.chief === true,
+            hasChat: typeof bot.sessionId === 'string',
+            agentLive: agent !== undefined,
+            running: agent?.status === 'running',
+          }
+        })
+        return {
+          unattended: unattended(),
+          bots,
+          assignments: recent(state),
+        }
+      },
+    },
   ]
 }
 
 /**
- * Activate the roster, its loopback endpoint, and the agent tools.
- * @param ctx - Host context providing the web server.
- * @param config - row configuration; `dataDir` overrides the roster location.
+ * The standing team note every Session in the profile receives, so any
+ * conversation knows the roster exists and who to hand work to.
+ * @param store - roster store.
+ * @returns Prompt text.
+ */
+function guidanceText(store) {
+  const bots = store.snapshot().bots
+  const chief = bots.find(bot => bot.chief === true)
+  const roster = bots.map(bot => `${bot.name} (${bot.role === '' ? 'no role' : bot.role})`).join(', ')
+  return [
+    '## Bot team',
+    `This profile runs a team of bots, each one a separate Session with its own folder and persona: ${roster}.`,
+    chief === undefined
+      ? 'Work is handed over with the `team_assign` tool.'
+      : `${chief.name} is the chief of staff and hands work over with \`team_assign\`; the person confirms each assignment in the Team panel.`,
+    'Use `team_roster` to see the team before naming a bot, and `team_status` before claiming what any bot is doing.',
+  ].join('\n')
+}
+
+/**
+ * Activate the roster, its loopback endpoint, the dispatch path, the agent
+ * tools, and the standing team note.
+ * @param ctx - Host context providing the web server, tools, and Agent registry.
+ * @param config - row configuration; `dataDir` moves the roster, `unattended`
+ *   lets a proposal deliver itself, `guidance` toggles the standing note.
  */
 export function apply(ctx, config = {}) {
   const warn = message => {
@@ -594,7 +949,11 @@ export function apply(ctx, config = {}) {
   const root = typeof config?.dataDir === 'string' && config.dataDir.trim() !== ''
     ? path.resolve(config.dataDir)
     : path.join(harnessHome(), 'bots-team')
+  const unattended = () => config?.unattended === true
   const store = new TeamStore(root, warn)
+  store.unattended = unattended()
+  store.agents = ctx.agents
+  store.deliver = (bot, record) => store.wake(bot, record)
 
   // Warm the roster (and its folders) without blocking activation.
   void store.load().catch(error => warn(`bots-team: roster unavailable (${String(error?.message ?? error)})`))
@@ -605,9 +964,23 @@ export function apply(ctx, config = {}) {
     handler: (req, res) => handle(req, res, store),
   }), 'bots-team: roster endpoint')
 
+  if (config?.guidance !== false) {
+    ctx.effect(() => ctx.systemPrompt.section({
+      name: 'bots-team',
+      order: 520,
+      text: () => {
+        try {
+          return guidanceText(store)
+        } catch {
+          return ''
+        }
+      },
+    }), 'bots-team: standing team note')
+  }
+
   if (typeof ctx.tools?.register !== 'function') return
   try {
-    for (const tool of teamTools(store)) {
+    for (const tool of teamTools(store, unattended)) {
       ctx.effect(() => ctx.tools.register(tool), `bots-team: ${tool.name}`)
     }
   } catch (error) {
@@ -615,5 +988,5 @@ export function apply(ctx, config = {}) {
   }
 }
 
-/** Templates are exported for tests and for a future team-import path. */
-export { TEMPLATES, renderAgentsMd, TeamStore, dispatch }
+/** Internals exported for tests and for a future team-import path. */
+export { TEMPLATES, CHIEF, CHIEF_ID, renderAgentsMd, TeamStore, dispatchRequest }

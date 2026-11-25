@@ -22,6 +22,8 @@ Every bot is a real DSH Session backed by its own folder, persona, and conversat
 
 DSH already runs agents well. What a chat-style roster adds is **persistence and organization**: a stable identity per bot (name, emoji, role), a dedicated workspace folder, and an ongoing conversation reachable in one click.
 
+The roster has a **chief of staff**: one bot whose job is to take a request, name the right teammate, and hand the work over. It never does the work itself, and it cannot send anything without your click.
+
 The panel acts as a messenger interface over native DSH Sessions rather than a separate runtime. Sending a message here invokes `session.prompt()` — the exact same path used by the main composer — so replies stream into both this panel and the bot's native session simultaneously. Clicking **Open chat** hands you the full DSH workspace (tools, approvals, files, and terminals) whenever you need deeper control.
 
 ## How It Works: Folder-Backed Personas
@@ -32,9 +34,24 @@ When you create a bot, the host backend writes its instructions directly to `<bo
 - **Plain-text persistence** — Instructions survive restarts and remain readable, diffable, and editable right on disk.
 - **Clean context isolation** — Each bot folder includes a `.git` root marker, preventing parent directory `AGENTS.md` instructions from leaking in.
 
+## How Work Gets Handed Out
+
+Ask the chief for something and it answers with a proposal, not with a claim that work started:
+
+1. The chief calls `team_assign`, which **records** the assignment for each named bot and returns `awaiting-confirmation`. Nothing has been sent.
+2. The Team panel shows those proposals in a queue, and the sidebar entry carries a count badge.
+3. You dispatch one — that click is the confirmation. The task arrives in the target bot's own conversation as a user message, attributed to this plugin, and the bot starts working.
+4. When that bot goes idle again, the assignment settles and the panel says so.
+
+You can also dispatch directly: select any bot, press **Assign a task**, and type it. The click is the confirmation, so the chief is not involved.
+
+**Unattended mode** is the explicit switch for the case where nobody is watching. Set `unattended: true` and `team_assign` delivers immediately; leave it off and an agent can only propose. The panel shows the mode, so it is always clear which one is in force.
+
 ## Features
 
 - **Sidebar integration** — Adds a global **Team** icon (two bot heads) to the left sidebar and opens the roster view in the main column.
+- **A chief of staff** — a built-in bot, pinned first in the roster, that decomposes a request and proposes assignments. Fired by accident, it is hired again on the next start, and its folder keeps the conversation.
+- **A confirmation gate** — proposals wait in the panel until you dispatch them; the sidebar entry shows how many are waiting, and each dispatch lands in the target bot's own session.
 - **Live roster** — Displays each bot's avatar, name, role, and real-time working/idle indicator. Auto-refreshes while open, so bots hired from other windows or chats appear automatically.
 - **Inline chat** — Includes a message transcript, tool-call chips, live status indicator, and a composer wired directly into the underlying DSH Session.
 - **Lazy session startup** — A bot's Session is created on its first message inside its dedicated folder, ensuring `AGENTS.md` instructions are loaded before its first turn.
@@ -86,6 +103,8 @@ You can customize the storage directory in your plugin configuration:
   name: 'dsh-bots-team'
   config:
     dataDir: /absolute/path/to/team-data   # default: $DSH_HOME/bots-team
+    unattended: false                      # true lets team_assign deliver without a panel click
+    guidance: true                         # standing "## Bot team" note in every Session's prompt
 ```
 
 ## Quick Start
@@ -106,12 +125,14 @@ Other agents in DSH can inspect and manage your roster programmatically:
 | `team_hire` | Creates a new bot (name, role, persona, emoji) and initializes its workspace folder. |
 | `team_brief` | Updates an existing bot's persona instructions or role. |
 | `team_fire` | Removes a bot from the roster while leaving its folder and Session intact on disk. |
+| `team_assign` | Records one or more assignments for named bots. Delivers them only in unattended mode; otherwise the person confirms in the panel. |
+| `team_status` | Reports each bot's session, whether its agent is live and running, and the state of recent assignments. |
 
 > **Example:** Ask any DSH chat to *"Hire a reviewer bot that is strict about unit tests"* — the new bot will appear in your Team panel on the next refresh.
 
 ## Data & Storage
 
-- **Roster manifest:** `$DSH_HOME/bots-team/team.json` (defaults to `~/.dsh/bots-team/team.json`).
+- **Roster manifest:** `$DSH_HOME/bots-team/team.json` (defaults to `~/.dsh/bots-team/team.json`), which also holds the last 100 assignment records.
 - **Bot workspaces:** `$DSH_HOME/bots-team/bots/<bot-id>/`, each containing `AGENTS.md` and a `.git` root marker.
 - **API transport:** The browser panel communicates with the host backend over the loopback endpoint `/bots-team/api`.
 
@@ -148,6 +169,8 @@ The test suite exercises the HTTP routes via mocked Node request/response pairs,
 - **Single thread per bot:** Each bot maintains one continuous conversation. Starting fresh requires hiring a new bot, while conversation forking must be done from the main session list.
 - **Shared model config:** Bots inherit the active profile's model; per-bot model overrides are not yet supported.
 - **Manual session cleanup:** Removing a bot from the roster does not delete or archive its underlying Session in DSH's main session list.
+- **A bot needs a conversation before it can be dispatched to:** the panel creates and binds one on the first dispatch, and a bot nobody has opened yet fails with that reason rather than silently doing nothing.
+- **Completion is polled, not pushed:** the panel notices a finished assignment on its next refresh and shows a short notice; there is no notification outside the panel yet.
 
 ## License
 

@@ -66,6 +66,19 @@ window.__ModuleLoader__.load({
       bot: 'Bot',
       removeAction: 'Remove from team',
       emptyChat: 'No messages yet.',
+      chiefBadge: 'Chief of staff',
+      proposals: 'Proposals from the chief',
+      proposalsHint: 'Nothing is sent until you dispatch it.',
+      dispatch: 'Dispatch',
+      dismiss: 'Dismiss',
+      assign: 'Assign a task',
+      assignHint: 'This arrives as a message in {name}\'s own conversation.',
+      assignPlaceholder: 'What should {name} do, and what does done look like?',
+      dispatched: 'Dispatched to {name}',
+      dismissed: 'Proposal dismissed',
+      unattendedOn: 'Unattended',
+      pendingMany: '{n} proposals to confirm',
+      pendingOne: '1 proposal to confirm',
     }
 
     const ZH = {
@@ -110,6 +123,19 @@ window.__ModuleLoader__.load({
       bot: '机器人',
       removeAction: '移出团队',
       emptyChat: '还没有消息。',
+      chiefBadge: '参谋长',
+      proposals: '参谋长的派单建议',
+      proposalsHint: '你点派发之前，什么都不会发出去。',
+      dispatch: '派发',
+      dismiss: '取消',
+      assign: '派单',
+      assignHint: '这条任务会作为消息进入 {name} 自己的会话。',
+      assignPlaceholder: '{name} 要做什么？什么样算做完？',
+      dispatched: '已派发给 {name}',
+      dismissed: '已取消该建议',
+      unattendedOn: '无人值守',
+      pendingMany: '{n} 条待确认',
+      pendingOne: '1 条待确认',
     }
 
     /**
@@ -198,9 +224,16 @@ window.__ModuleLoader__.load({
           running: false,
           starting: false,
           editing: undefined,
+          assignments: [],
+          chiefId: undefined,
+          unattended: false,
+          assignOpen: false,
+          assignDraft: '',
+          toast: '',
         }
         this.conversation = undefined
         this.disposed = false
+        this.toastTimer = undefined
       }
 
       subscribe = (listener) => {
@@ -238,6 +271,9 @@ window.__ModuleLoader__.load({
             bots,
             templates: Array.isArray(state.templates) ? state.templates : [],
             dataDir: state.dataDir ?? '',
+            assignments: Array.isArray(state.assignments) ? state.assignments : [],
+            chiefId: typeof state.chiefId === 'string' ? state.chiefId : bots.find(bot => bot.chief === true)?.id,
+            unattended: state.unattended === true,
             selectedId: this.snapshot.selectedId ?? bots[0]?.id,
           })
           this.select(this.snapshot.selectedId ?? bots[0]?.id)
@@ -261,10 +297,128 @@ window.__ModuleLoader__.load({
       async refresh() {
         try {
           const body = await call('/state')
-          const bots = body.state?.bots
-          if (Array.isArray(bots)) this.set({ bots, templates: body.state?.templates ?? this.snapshot.templates })
+          const state = body.state
+          const bots = state?.bots
+          if (Array.isArray(bots)) {
+            const assignments = Array.isArray(state.assignments) ? state.assignments : this.snapshot.assignments
+            // A dispatch that settled since the last poll is worth saying out loud.
+            const finished = assignments.find(record => record.status === 'done'
+              && this.snapshot.assignments.some(previous => previous.id === record.id && previous.status !== 'done'))
+            this.set({
+              bots,
+              templates: state.templates ?? this.snapshot.templates,
+              assignments,
+              unattended: state.unattended === true,
+            })
+            if (finished !== undefined) this.notify(this.t('dispatched').replace('{name}', finished.botName))
+          }
         } catch {
           // A transient failure keeps the roster already on screen.
+        }
+      }
+
+      /** Proposals waiting for a human click. */
+      pending() {
+        return this.snapshot.assignments.filter(record => record.status === 'proposed')
+      }
+
+      /**
+       * Show one short message, then clear it.
+       * @param text - text to show.
+       */
+      notify(text) {
+        if (this.toastTimer !== undefined) clearTimeout(this.toastTimer)
+        this.set({ toast: text })
+        this.toastTimer = setTimeout(() => this.set({ toast: '' }), 4000)
+      }
+
+      /**
+       * Deliver one proposal into its bot's Session. This click is the
+       * confirmation the agent-side tool never has.
+       * @param id - assignment identity.
+       */
+      async dispatchProposal(id) {
+        const record = this.snapshot.assignments.find(candidate => candidate.id === id)
+        try {
+          if (record !== undefined) await this.ensureSession(this.bot(record.botId))
+          const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'dispatch', assignmentId: id }) })
+          this.set({ assignments: body.state?.assignments ?? this.snapshot.assignments, bots: body.state?.bots ?? this.snapshot.bots, notice: '' })
+          if (body.assignment?.status === 'failed') {
+            this.set({ notice: `${this.t('dispatch')}: ${String(body.assignment.error ?? '')}` })
+            return
+          }
+          this.notify(this.t('dispatched').replace('{name}', record?.botName ?? ''))
+        } catch (error) {
+          this.set({ notice: `${this.t('dispatch')}: ${String(error?.message ?? error)}` })
+        }
+      }
+
+      /**
+       * Drop one proposal without sending it.
+       * @param id - assignment identity.
+       */
+      async dismissProposal(id) {
+        try {
+          const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'cancel', assignmentId: id }) })
+          this.set({ assignments: body.state?.assignments ?? this.snapshot.assignments, notice: '' })
+          this.notify(this.t('dismissed'))
+        } catch (error) {
+          this.set({ notice: `${this.t('dismiss')}: ${String(error?.message ?? error)}` })
+        }
+      }
+
+      /**
+       * Give a bot a Session, creating and binding one when it has none. A bot
+       * cannot receive work before its first conversation exists.
+       * @param bot - roster record.
+       * @returns The bot with a session id, or undefined when creation failed.
+       */
+      async ensureSession(bot) {
+        if (bot === undefined) return undefined
+        if (typeof bot.sessionId === 'string' && bot.sessionId !== '') return bot
+        const sessionId = await this.ctx.sessions.create({ cwd: bot.folder })
+        const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'bind', botId: bot.id, sessionId }) })
+        const bots = this.snapshot.bots.map(candidate => (candidate.id === bot.id ? body.bot : candidate))
+        this.set({ bots })
+        return body.bot
+      }
+
+      /** Open or close the panel's own assignment composer. */
+      toggleAssign() {
+        this.set({ assignOpen: !this.snapshot.assignOpen, assignDraft: '' })
+      }
+
+      /** Track the panel's assignment draft. */
+      setAssignDraft(text) {
+        this.set({ assignDraft: text })
+      }
+
+      /**
+       * Send a task from the panel directly to the selected bot. The click is
+       * the confirmation, so this bypasses the proposal queue.
+       * @param text - task body.
+       */
+      async assignNow(text) {
+        const body = text.trim()
+        const bot = this.bot(this.snapshot.selectedId)
+        if (body === '' || bot === undefined) return
+        this.set({ assigning: true, notice: '' })
+        try {
+          await this.ensureSession(bot)
+          const result = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'assign', botId: bot.id, task: body }) })
+          this.set({
+            assigning: false,
+            assignOpen: false,
+            assignDraft: '',
+            bots: result.state?.bots ?? this.snapshot.bots,
+            assignments: result.state?.assignments ?? this.snapshot.assignments,
+          })
+          this.notify(this.t('dispatched').replace('{name}', bot.name))
+          if (result.assignment?.status === 'failed') {
+            this.set({ notice: `${this.t('assign')}: ${String(result.assignment.error ?? '')}` })
+          }
+        } catch (error) {
+          this.set({ assigning: false, notice: `${this.t('assign')}: ${String(error?.message ?? error)}` })
         }
       }
 
@@ -457,6 +611,7 @@ window.__ModuleLoader__.load({
       /** Stop every owned subscription and reference. */
       dispose() {
         this.disposed = true
+        if (this.toastTimer !== undefined) clearTimeout(this.toastTimer)
         this.closeConversation()
         this.listeners.clear()
       }
@@ -575,7 +730,7 @@ window.__ModuleLoader__.load({
     }
 
     /** The roster row for one bot. */
-    function RosterRow({ bot, active, running, onSelect }) {
+    function RosterRow({ bot, active, running, onSelect, t }) {
       return h('button', {
         type: 'button',
         className: active ? 'bt-row bt-row-active' : 'bt-row',
@@ -584,11 +739,44 @@ window.__ModuleLoader__.load({
       },
       h(Avatar, { bot, size: 28 }),
       h('span', { className: 'bt-row-text' },
-        h('span', { className: 'bt-row-name' }, bot.name),
+        h('span', { className: 'bt-row-name' },
+          bot.name,
+          bot.chief === true ? h('span', { className: 'bt-chief-badge' }, t('chiefBadge')) : null),
         h('span', { className: 'bt-row-role' }, bot.role === '' ? '—' : bot.role)),
       running
         ? h('span', { className: 'bt-dot bt-dot-live', 'aria-label': 'working' })
         : null)
+    }
+
+    /**
+     * The chief's pending assignments. Nothing here has been sent yet; each row
+     * is the human confirmation gate.
+     */
+    function Proposals({ controller, snapshot }) {
+      const t = controller.t
+      const pending = snapshot.assignments.filter(record => record.status === 'proposed')
+      if (pending.length === 0) return null
+      return h('section', { className: 'bt-proposals', 'aria-label': t('proposals') },
+        h('div', { className: 'bt-proposals-head' },
+          h('span', { className: 'bt-proposals-title' },
+            t('proposals'),
+            h('span', { className: 'bt-count' }, String(pending.length))),
+          h('span', { className: 'bt-proposals-hint' }, t('proposalsHint'))),
+        pending.map(record => h('div', { key: record.id, className: 'bt-proposal' },
+          h('div', { className: 'bt-proposal-text' },
+            h('span', { className: 'bt-proposal-to' }, record.botName),
+            h('span', { className: 'bt-proposal-task' }, record.task)),
+          h('div', { className: 'bt-proposal-actions' },
+            h('button', {
+              type: 'button',
+              className: 'bt-primary',
+              onClick: () => { void controller.dispatchProposal(record.id) },
+            }, t('dispatch')),
+            h('button', {
+              type: 'button',
+              className: 'bt-btn',
+              onClick: () => { void controller.dismissProposal(record.id) },
+            }, t('dismiss'))))))
     }
 
     /** Transcript row. */
@@ -631,6 +819,11 @@ window.__ModuleLoader__.load({
             h('div', { className: 'bt-chat-name' }, bot.name),
             h('div', { className: 'bt-chat-role' }, bot.role === '' ? bot.folder : `${bot.role} · ${bot.folder}`)),
           h(Status, { bot, running: snapshot.running, t }),
+          h('button', {
+            className: snapshot.assignOpen ? 'bt-btn bt-btn-on' : 'bt-btn',
+            type: 'button',
+            onClick: () => controller.toggleAssign(),
+          }, t('assign')),
           h('button', { className: 'bt-btn', type: 'button', onClick: () => controller.edit(bot.id) }, t('edit')),
           h('button', {
             className: 'bt-btn',
@@ -639,6 +832,25 @@ window.__ModuleLoader__.load({
             title: t('openHint'),
             onClick: () => controller.openFull(bot),
           }, t('open'))),
+        snapshot.assignOpen
+          ? h('div', { className: 'bt-assign' },
+              h('div', { className: 'bt-assign-hint' }, t('assignHint').replace('{name}', bot.name)),
+              h('textarea', {
+                className: 'bt-textarea bt-assign-input',
+                rows: 3,
+                value: snapshot.assignDraft,
+                placeholder: t('assignPlaceholder').replace('{name}', bot.name),
+                onChange: event => controller.setAssignDraft(event.target.value),
+              }),
+              h('div', { className: 'bt-assign-actions' },
+                h('button', {
+                  className: 'bt-primary',
+                  type: 'button',
+                  disabled: snapshot.assigning || snapshot.assignDraft.trim() === '',
+                  onClick: () => { void controller.assignNow(snapshot.assignDraft) },
+                }, snapshot.assigning ? '…' : t('dispatch')),
+                h('button', { className: 'bt-btn', type: 'button', onClick: () => controller.toggleAssign() }, t('dismiss'))))
+          : null,
         snapshot.notice !== '' ? h('div', { className: 'bt-banner' }, snapshot.notice) : null,
         h('div', { className: 'bt-log', ref: listRef },
           started
@@ -702,7 +914,11 @@ window.__ModuleLoader__.load({
           h('div', undefined,
             h('h1', undefined, t('title')),
             h('p', undefined, t('subtitle'))),
-          h('button', { className: 'bt-primary', type: 'button', onClick: () => controller.create() }, t('newBot'))),
+          h('div', { className: 'bt-head-actions' },
+            snapshot.unattended
+              ? h('span', { className: 'bt-mode', title: t('unattendedOn') }, t('unattendedOn'))
+              : null,
+            h('button', { className: 'bt-primary', type: 'button', onClick: () => controller.create() }, t('newBot')))),
         h('div', { className: 'bt-body' },
           h('aside', { className: 'bt-roster', 'aria-label': t('title') },
             snapshot.bots.length === 0
@@ -715,8 +931,14 @@ window.__ModuleLoader__.load({
                   active: bot.id === snapshot.selectedId,
                   running: bot.id === snapshot.selectedId && snapshot.running,
                   onSelect: () => controller.select(bot.id),
+                  t,
                 }))),
-          h('section', { className: 'bt-chat' }, h(Chat, { controller, snapshot }))),
+          h('section', { className: 'bt-chat' },
+            h(Proposals, { controller, snapshot }),
+            h(Chat, { controller, snapshot }))),
+        snapshot.toast === ''
+          ? null
+          : h('div', { className: 'bt-toast', role: 'status' }, snapshot.toast),
         snapshot.editing === undefined
           ? null
           : h(Editor, { controller, snapshot, onClose: () => controller.cancelEdit() }))
@@ -726,7 +948,14 @@ window.__ModuleLoader__.load({
     function TeamIcon(props) {
       const size = typeof props.size === 'number' ? props.size : 20
       const active = props.active === true
-      return h('svg', {
+      const controller = props.controller
+      const snapshot = controller === undefined
+        ? undefined
+        : React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+      const pending = snapshot === undefined
+        ? 0
+        : snapshot.assignments.filter(record => record.status === 'proposed').length
+      const glyph = h('svg', {
         viewBox: '0 0 24 24',
         width: size,
         height: size,
@@ -745,6 +974,10 @@ window.__ModuleLoader__.load({
       h('circle', { cx: 7.6, cy: 14.6, r: 1.15, fill: 'currentColor', stroke: 'none' }),
       h('circle', { cx: 12.4, cy: 14.6, r: 1.15, fill: 'currentColor', stroke: 'none' }),
       h('path', { d: 'M8 17.8h4.2' }))
+      if (pending === 0) return glyph
+      return h('span', { className: 'bt-icon-wrap' },
+        glyph,
+        h('span', { className: 'bt-icon-badge', 'aria-label': String(pending) }, pending > 9 ? '9+' : String(pending)))
     }
 
     /** Keeps a throwing panel from blanking the slot. */
@@ -919,6 +1152,59 @@ window.__ModuleLoader__.load({
 .bt-chip:hover { border-color: var(--dsw-alias-brand-primary); }
 .bt-dialog-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 .bt-spacer { flex: 1; }
+.bt-chief-badge {
+  margin-left: 6px; padding: 1px 5px; border-radius: 4px; font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0.02em; color: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 35%, transparent);
+  vertical-align: 1px; white-space: nowrap;
+}
+.bt-btn-on { border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary); }
+.bt-proposals {
+  margin: 10px 20px 0; padding: 10px 12px; border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1);
+  display: flex; flex-direction: column; gap: 8px; flex: none;
+}
+.bt-proposals-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.bt-proposals-title { font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.bt-count {
+  font-size: 10.5px; font-weight: 600; padding: 0 5px; border-radius: 999px; line-height: 16px;
+  color: #fff; background: var(--dsw-alias-brand-primary);
+}
+.bt-proposals-hint { font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.bt-proposal {
+  display: flex; gap: 10px; align-items: flex-start; justify-content: space-between;
+  padding-top: 8px; border-top: 1px solid var(--dsw-alias-border-l1);
+}
+.bt-proposal-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.bt-proposal-to { font-size: 11px; font-weight: 600; color: var(--dsw-alias-brand-primary); }
+.bt-proposal-task { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.bt-proposal-actions { display: flex; gap: 6px; flex: none; }
+.bt-assign {
+  margin: 10px 20px 0; display: flex; flex-direction: column; gap: 6px; flex: none;
+}
+.bt-assign-hint { font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.bt-assign-input { resize: vertical; }
+.bt-assign-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.bt-toast {
+  position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 70;
+  padding: 7px 14px; border-radius: 999px; font-size: 12px; pointer-events: none;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-overlay);
+  border: 1px solid var(--dsw-alias-border-l2); box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+}
+.bt-head-actions { display: flex; align-items: center; gap: 8px; }
+.bt-mode {
+  font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px;
+  color: var(--dsw-alias-state-warn-primary);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
+}
+.bt-icon-wrap { position: relative; display: inline-flex; }
+.bt-icon-badge {
+  position: absolute; top: -4px; right: -6px; min-width: 13px; height: 13px; padding: 0 3px;
+  border-radius: 999px; font-size: 9px; font-weight: 700; line-height: 13px; text-align: center;
+  color: #fff; background: var(--dsw-alias-brand-primary);
+}
 `
 
     /** Required Client services. */
@@ -957,7 +1243,7 @@ window.__ModuleLoader__.load({
         order: 6,
         label: () => t('panel'),
         locale: NS,
-      }, TeamIcon)), 'bots-team: sidebar entry')
+      }, props => h(TeamIcon, { ...props, controller }))), 'bots-team: sidebar entry')
     }
 
     return { inject, apply }

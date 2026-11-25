@@ -31,11 +31,38 @@ const check = async (name, run) => {
 const host = await import('../index.js')
 const routes = []
 const tools = []
+const sections = []
+/** One controllable fake agent per session id. */
+const agents = new Map()
+/** Messages handed to a bot through the dispatch path. */
+const delivered = []
+let releaseIdle = () => {}
+const fakeAgent = (sessionId) => {
+  if (agents.has(sessionId)) return agents.get(sessionId)
+  const agent = {
+    sessionId,
+    status: 'idle',
+    followup(message) {
+      delivered.push({ sessionId, message })
+      agent.status = 'running'
+    },
+    whenIdle: () => new Promise(resolve => { releaseIdle = () => { agent.status = 'idle'; resolve() } }),
+  }
+  agents.set(sessionId, agent)
+  return agent
+}
 const hostCtx = {
   logger: { warn() {} },
   effect: (factory) => { const dispose = factory(); return dispose },
   webServer: { register: (route) => { routes.push(route); return () => {} } },
   tools: { register: (tool) => { tools.push(tool); return () => {} } },
+  agents: {
+    get: sessionId => agents.get(sessionId),
+    resume: async ({ resumeSessionId }) => ({ agent: fakeAgent(resumeSessionId) }),
+  },
+  systemPrompt: {
+    section: (section) => { sections.push(section); return () => {} },
+  },
 }
 const configDir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-wired-'))
 host.apply(hostCtx, { dataDir: configDir })
@@ -48,7 +75,7 @@ const store = new host.TeamStore(dataDir, () => {})
  * @param pathname - absolute path below the plugin prefix.
  * @param init - method, headers, and raw body.
  */
-const request = (pathname, init = {}) => host.dispatch({
+const request = (pathname, init = {}) => host.dispatchRequest({
   method: init.method ?? 'GET',
   pathname,
   header: (name) => init.headers?.[name],
@@ -57,13 +84,16 @@ const request = (pathname, init = {}) => host.dispatch({
 const post = (body, headers = { 'content-type': 'application/json' }) =>
   request('/bots-team/api/bots', { method: 'POST', headers, body: JSON.stringify(body) })
 
-await check('registers one prefix route with a raw handler and four tools', async () => {
+await check('registers one prefix route, six tools, and the standing team note', async () => {
   assert.equal(routes.length, 1)
   assert.equal(routes[0].kind, 'prefix')
   assert.equal(routes[0].path, '/bots-team/api')
   assert.equal(typeof routes[0].handler, 'function', 'writes need a handler; a resource only sees GET and HEAD')
-  assert.deepEqual(tools.map(tool => tool.name), ['team_roster', 'team_hire', 'team_brief', 'team_fire'])
+  assert.deepEqual(tools.map(tool => tool.name),
+    ['team_roster', 'team_hire', 'team_brief', 'team_fire', 'team_assign', 'team_status'])
   assert.doesNotThrow(() => JSON.stringify(tools[0].parameters))
+  assert.equal(sections.length, 1)
+  assert.equal(sections[0].name, 'bots-team')
 })
 
 await check('the wired route answers a real request pair', async () => {
@@ -87,11 +117,41 @@ await check('the wired route answers a real request pair', async () => {
   assert.ok(body.state.bots.length >= 3, 'the wired route seeds its own roster')
 })
 
+/**
+ * Speak to the route the Host actually serves, so the tool checks and the HTTP
+ * checks drive one roster instead of two.
+ */
+const wire = async (pathname, { method = 'GET', headers = {}, body = '' } = {}) => {
+  const chunks = body === '' ? [] : [body]
+  const req = {
+    method,
+    url: pathname,
+    headers,
+    async *[Symbol.asyncIterator]() { for (const chunk of chunks) yield Buffer.from(chunk) },
+  }
+  const out = { status: undefined, headers: {}, body: undefined }
+  const res = {
+    writeHead: (status, values) => { out.status = status; Object.assign(out.headers, values) },
+    end: (text = '') => { out.body = text },
+  }
+  await routes[0].handler(req, res)
+  return { status: out.status, body: out.body === '' || out.body === undefined ? undefined : JSON.parse(out.body) }
+}
+const wirePost = (payload) => wire('/bots-team/api/bots', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(payload),
+})
+
 await check('seeds a team on first run', async () => {
   const { status, body } = await request('/bots-team/api/state')
   assert.equal(status, 200)
   assert.equal(body.ok, true)
-  assert.deepEqual(body.state.bots.map(bot => bot.id), ['scout', 'forge', 'ledger'])
+  assert.deepEqual(body.state.bots.map(bot => bot.id), ['chief', 'scout', 'forge', 'ledger'])
+  assert.equal(body.state.chiefId, 'chief')
+  assert.equal(body.state.bots[0].chief, true)
+  assert.match(body.state.bots[0].persona, /chief of staff/iu)
+  assert.deepEqual(body.state.assignments, [])
   assert.equal(body.state.templates.length, 4)
   assert.equal(body.state.dataDir, dataDir)
 })
@@ -149,7 +209,8 @@ await check('removes a bot from the roster but keeps its folder', async () => {
 
 await check('agent tools read and mutate the same roster', async () => {
   const roster = await tools[0].execute({}, {})
-  assert.equal(roster.bots.length, 3)
+  assert.equal(roster.bots.length, 4)
+  assert.equal(roster.chiefId, 'chief')
   assert.equal(typeof roster.bots[0].folder, 'string')
   const hired = await tools[1].execute({ name: 'Echo', persona: 'You repeat back what matters.', role: 'Challenger' }, {})
   assert.equal(hired.bot.name, 'Echo')
@@ -159,13 +220,83 @@ await check('agent tools read and mutate the same roster', async () => {
   assert.equal(fired.removed.id, hired.bot.id)
 })
 
+await check('the chief proposes work but sends nothing', async () => {
+  const assign = tools.find(tool => tool.name === 'team_assign')
+  assert.equal(delivered.length, 0, 'a tool call must not deliver on its own')
+  const proposal = await assign.execute({ assignments: [{ botId: 'scout', task: '复跑 3.2 的两条命令，回报数字是否一致。' }] }, {})
+  assert.equal(proposal.mode, 'awaiting-confirmation')
+  assert.equal(proposal.assignments.length, 1)
+  assert.match(proposal.note, /confirm/u)
+  assert.equal(delivered.length, 0)
+})
+
+await check('dispatch needs a session before it can wake a bot', async () => {
+  const state = (await wire('/bots-team/api/state')).body.state
+  const record = state.assignments.find(candidate => candidate.status === 'proposed')
+  assert.ok(record, 'the chief proposal is on the served roster')
+  const attempted = await wirePost({ op: 'dispatch', assignmentId: record.id })
+  assert.equal(attempted.body.ok, true)
+  assert.equal(attempted.body.assignment.status, 'failed')
+  assert.match(attempted.body.assignment.error, /no session yet/u)
+})
+
+await check('a dispatched task lands as a user message in the bot session', async () => {
+  await wirePost({ op: 'bind', botId: 'scout', sessionId: 'sess-scout' })
+  const proposed = await wirePost({ op: 'propose', items: [{ botId: 'scout', task: '核对表 2 的数字。' }], source: 'chief' })
+  const record = proposed.body.assignments[0]
+  const dispatched = await wirePost({ op: 'dispatch', assignmentId: record.id })
+  assert.equal(dispatched.status, 200)
+  assert.equal(dispatched.body.assignment.status, 'sent')
+  assert.equal(delivered.length, 1)
+  assert.equal(delivered[0].sessionId, 'sess-scout')
+  assert.equal(delivered[0].message.role, 'user')
+  assert.equal(delivered[0].message.content[0].text, '核对表 2 的数字。')
+  assert.equal(delivered[0].message.source.kind, 'team-assign')
+  releaseIdle()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const after = (await wire('/bots-team/api/state')).body.state
+  assert.equal(after.assignments.find(candidate => candidate.id === record.id).status, 'done')
+})
+
+await check('a panel click dispatches directly, and cancel drops a proposal', async () => {
+  const before = delivered.length
+  const direct = await wirePost({ op: 'assign', botId: 'scout', task: '直接派一条。' })
+  assert.equal(direct.body.assignment.status, 'sent')
+  assert.equal(delivered.length, before + 1)
+  const proposed = await wirePost({ op: 'propose', items: [{ botId: 'forge', task: '临时任务。' }] })
+  const dropped = await wirePost({ op: 'cancel', assignmentId: proposed.body.assignments[0].id })
+  assert.equal(dropped.body.assignment.status, 'cancelled')
+  const stale = await wirePost({ op: 'dispatch', assignmentId: dropped.body.assignment.id })
+  assert.equal(stale.status, 500)
+  assert.match(stale.body.error, /cancelled/u)
+})
+
+await check('team_status reports sessions, live agents, and recent assignments', async () => {
+  const status = tools.find(tool => tool.name === 'team_status')
+  const report = await status.execute({}, {})
+  const scout = report.bots.find(bot => bot.id === 'scout')
+  assert.equal(scout.hasChat, true)
+  assert.equal(scout.agentLive, true)
+  assert.equal(report.unattended, false)
+  assert.ok(report.assignments.length >= 1)
+  assert.ok(report.assignments.some(record => record.status === 'done'))
+})
+
+await check('the standing note names the team and the confirmation gate', async () => {
+  const text = sections[0].text({})
+  assert.match(text, /Bot team/u)
+  assert.match(text, /Scout/u)
+  assert.match(text, /chief of staff/u)
+  assert.match(text, /Team panel/u)
+})
+
 await check('survives a corrupt roster file', async () => {
   const broken = await mkdtemp(path.join(os.tmpdir(), 'bots-team-broken-'))
   const { writeFile } = await import('node:fs/promises')
   await writeFile(path.join(broken, 'team.json'), '{not json', 'utf8')
   const repaired = new host.TeamStore(broken, () => {})
   const state = await repaired.load()
-  assert.equal(state.bots.length, 3, 'a corrupt file is replaced by the starter team')
+  assert.equal(state.bots.length, 4, 'a corrupt file is replaced by the chief and the starter team')
   await rm(broken, { recursive: true, force: true })
 })
 
@@ -444,7 +575,12 @@ await check('deleting a bot falls back to a remaining one', async () => {
 
 await check('disposal releases the retained session', async () => {
   let released = 0
-  controller.ctx.sessions.retain = () => ({
+  // Its own instance: disposing the shared controller would freeze the state the
+  // later rendering checks still drive.
+  const Fresh = Object.getPrototypeOf(controller).constructor
+  const own = new Fresh(clientCtx, key => key)
+  own.set({ bots: controller.getSnapshot().bots, selectedId: 'scout' })
+  own.ctx.sessions.retain = () => ({
     sessionId: 'sess-created',
     ready: Promise.resolve({
       session: { getSnapshot: () => ({}), subscribe: () => () => {} },
@@ -452,19 +588,108 @@ await check('disposal releases the retained session', async () => {
     }),
     release: () => { released += 1 },
   })
-  controller.select('scout')
+  own.select('scout')
   await new Promise(resolve => setTimeout(resolve, 0))
-  controller.dispose()
+  own.dispose()
   assert.equal(released, 1)
 })
 
 await check('the sidebar icon draws without a background tile', async () => {
   const icon = registrations.find(entry => entry.options.name === 'sidebar.panellist').component
-  const tree = icon({ size: 20, active: true })
+  const wrapper = icon({ size: 20, active: true })
+  const tree = wrapper.type(wrapper.props)
   assert.equal(tree.type, 'svg')
   walk(tree).forEach(node => {
     assert.ok(!['style', 'script', 'image', 'foreignObject'].includes(node?.type), `${String(node?.type)} is not allowed in an icon`)
   })
+})
+
+await check('the sidebar icon carries the pending-proposal count', async () => {
+  controller.set({
+    assignments: [
+      { id: 'a1', botId: 'scout', botName: 'Scout', task: 'one', status: 'proposed' },
+      { id: 'a2', botId: 'forge', botName: 'Forge', task: 'two', status: 'proposed' },
+      { id: 'a3', botId: 'ledger', botName: 'Ledger', task: 'three', status: 'done' },
+    ],
+  })
+  const icon = registrations.find(entry => entry.options.name === 'sidebar.panellist').component
+  const wrapper = icon({ size: 20, active: false })
+  const nodes = walk(wrapper.type(wrapper.props))
+  const badge = nodes.find(node => node?.props?.className === 'bt-icon-badge')
+  assert.ok(badge, 'a pending proposal should badge the sidebar entry')
+  assert.equal(badge.props.children, '2')
+  controller.set({ assignments: [] })
+})
+
+await check('the panel lists proposals and dispatches on a click', async () => {
+  const chief = { id: 'chief', name: 'Chief', emoji: '🎖️', role: 'Chief of staff', color: '#6d7c95', persona: 'Dispatch.', folder: path.join(dataDir, 'bots/chief'), sessionId: 'sess-chief', chief: true }
+  controller.set({
+    bots: [chief, ...controller.getSnapshot().bots.filter(bot => bot.id !== 'chief')],
+    selectedId: 'chief',
+    assignments: [{ id: 'p1', botId: 'scout', botName: 'Scout', task: '核对表 2 的数字。', status: 'proposed', source: 'chief' }],
+  })
+  const nodes = render()
+  assert.ok(nodes.includes('Proposals from the chief'), 'the queue renders its title')
+  assert.ok(nodes.some(node => node?.props?.className === 'bt-proposal-task' && node.props.children === '核对表 2 的数字。'))
+  const badge = nodes.find(node => node?.props?.className === 'bt-chief-badge')
+  assert.equal(badge.props.children, 'Chief of staff', 'the chief is marked in the roster')
+  const dispatchButton = nodes.find(node => node?.props?.className === 'bt-primary' && node.props.children === 'Dispatch')
+  assert.ok(dispatchButton, 'a proposal offers dispatch')
+
+  const posts = []
+  globalThis.fetch = async (url, init) => {
+    posts.push(JSON.parse(init.body))
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        assignment: { id: 'p1', status: 'sent' },
+        state: {
+          bots: controller.getSnapshot().bots,
+          assignments: [{ id: 'p1', botId: 'scout', botName: 'Scout', task: '核对表 2 的数字。', status: 'sent' }],
+        },
+      }),
+    }
+  }
+  await controller.dispatchProposal('p1')
+  assert.deepEqual(posts[0], { op: 'dispatch', assignmentId: 'p1' })
+  assert.equal(controller.getSnapshot().assignments[0].status, 'sent')
+  assert.match(controller.getSnapshot().toast, /Scout/u)
+  const after = render()
+  assert.equal(after.filter(node => node?.props?.className === 'bt-proposals').length, 0, 'the queue clears once sent')
+})
+
+await check('the panel can assign directly from a bot, creating its session first', async () => {
+  const virgin = { id: 'virgin', name: 'Virgo', emoji: '🛰️', role: 'Spotter', color: '#5b8def', persona: 'Watch.', folder: path.join(dataDir, 'bots/virgin'), sessionId: null }
+  controller.set({ bots: [...controller.getSnapshot().bots, virgin], selectedId: 'virgin', assignOpen: true })
+  const posts = []
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body)
+    posts.push(body)
+    if (body.op === 'bind') {
+      assert.equal(body.sessionId, 'sess-virgin')
+      return { ok: true, status: 200, json: async () => ({ ok: true, bot: { ...virgin, sessionId: 'sess-virgin' }, state: { bots: controller.getSnapshot().bots } }) }
+    }
+    assert.equal(body.op, 'assign')
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        assignment: { id: 'p2', status: 'sent' },
+        state: { bots: controller.getSnapshot().bots, assignments: [{ id: 'p2', botId: 'virgin', botName: 'Virgo', task: '看着。', status: 'sent' }] },
+      }),
+    }
+  }
+  controller.ctx.sessions.create = async (options) => {
+    assert.equal(options.cwd, virgin.folder)
+    return 'sess-virgin'
+  }
+  await controller.assignNow('看着。')
+  assert.deepEqual(posts.map(body => body.op), ['bind', 'assign'], 'the panel creates the session, then dispatches')
+  assert.equal(controller.getSnapshot().assignOpen, false)
+  assert.equal(controller.getSnapshot().assignDraft, '')
 })
 
 await rm(dataDir, { recursive: true, force: true })
