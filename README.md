@@ -168,7 +168,7 @@ Other agents in DSH can inspect and manage your roster programmatically:
 | [`docs/DETAIL.md`](docs/DETAIL.md) | Plugin overview displayed inside the DSH Plugin Manager. |
 | [`assets/`](assets) | Storefront tile (`icon-180.png`) and the SVG it is rendered from (`tile.svg`). |
 | [`icon.svg`](icon.svg) | Plugin icon, resolved through the `./icon` export. |
-| [`test/smoke.mjs`](test/smoke.mjs) | Headless test suite (49 checks covering both host and client). |
+| [`test/smoke.mjs`](test/smoke.mjs) | Headless test suite (50 checks covering both host and client). |
 
 **Zero external dependencies:** The host backend uses only Node.js built-ins so it runs cleanly across any DSH profile. The browser client imports only React from DSH's runtime module table.
 
@@ -177,7 +177,7 @@ Other agents in DSH can inspect and manage your roster programmatically:
 Run the smoke test suite:
 
 ```sh
-node test/smoke.mjs      # runs 49 checks; exits non-zero on failure
+node test/smoke.mjs      # runs 50 checks; exits non-zero on failure
 ```
 
 The suite drives the HTTP routes through mocked Node request/response pairs, exercises the roster operations and all six agent tools against a temporary directory, and loads `client.js` through a `__ModuleLoader__` stub with a lightweight React shim to assert rendered output and data flow — no browser required. It also pins the things that broke before: a cleared Session binding cannot be resurrected by a stale snapshot, a persona never reaches a Session outside the roster, and no brand-filled control may hardcode a white label.

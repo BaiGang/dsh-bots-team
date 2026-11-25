@@ -505,6 +505,58 @@ const clientExports = captured.factory((specifier) => {
   throw new Error(`unexpected external import: ${specifier}`)
 })
 
+await check('both READMEs still describe the code that ships', async () => {
+  const { readFileSync, existsSync } = await import('node:fs')
+  const read = name => readFileSync(path.resolve(name), 'utf8')
+  const en = read('README.md')
+  const zh = read('README.zh.md')
+
+  // Same section structure in both languages: a rewrite must not drop one.
+  const sections = text => [...text.matchAll(/^## .+$/gmu)].length
+  assert.equal(sections(en), sections(zh), 'both READMEs keep the same number of sections')
+
+  // The numbers a reader trusts must match the suite and the tool registry.
+  const checks = (read('test/smoke.mjs').match(/await check\(/gu) ?? []).length
+  assert.match(en, new RegExp(`\\b${checks} checks?\\b`, 'u'), `the README names the real check count (${checks})`)
+  assert.match(zh, new RegExp(`${checks} 项`, 'u'), 'the Chinese README names the same check count')
+
+  const registered = [...read('index.js').matchAll(/name: '(team_[a-z]+)'/gu)].map(match => match[1])
+  const documented = text => [...text.matchAll(/^\| `(team_[a-z]+)`/gmu)].map(match => match[1])
+  assert.deepEqual(documented(en).sort(), registered.sort(), 'the English tool table lists exactly the registered tools')
+  assert.deepEqual(documented(zh).sort(), registered.sort(), 'the Chinese tool table lists them too')
+
+  // The panel sketch is width-aligned; one stray character breaks the frame.
+  // Terminal width: double for CJK and emoji, zero for a variation selector.
+  const cells = (char) => {
+    const code = char.codePointAt(0)
+    if (code === 0xFE0E || code === 0xFE0F) return 0
+    const wide = (code >= 0x1100 && code <= 0x115F)
+      || (code >= 0x2E80 && code <= 0xA4CF)
+      || (code >= 0xAC00 && code <= 0xD7A3)
+      || (code >= 0xF900 && code <= 0xFAFF)
+      || (code >= 0xFE30 && code <= 0xFE6F)
+      || (code >= 0xFF00 && code <= 0xFF60)
+      || (code >= 0xFFE0 && code <= 0xFFE6)
+      || (code >= 0x1F000 && code <= 0x1FAFF)
+      || (code >= 0x2600 && code <= 0x27BF)
+    return wide ? 2 : 1
+  }
+  for (const [name, text] of [['README.md', en], ['README.zh.md', zh]]) {
+    const block = /```\n(┌[\s\S]*?)```/u.exec(text)
+    assert.ok(block, `${name} still sketches the panel`)
+    const widths = new Set(block[1].trimEnd().split('\n').map(line => [...line].reduce((total, char) => total + cells(char), 0)))
+    assert.equal(widths.size, 1, `${name}'s sketch lines share one width (got ${[...widths].join(',')})`)
+  }
+
+  // Relative links must point at files that exist.
+  for (const [name, text] of [['README.md', en], ['README.zh.md', zh]]) {
+    for (const match of text.matchAll(/\]\((?!https?:|#|mailto:)([^)]+)\)/gu)) {
+      const target = match[1].split('#')[0]
+      assert.ok(existsSync(path.resolve(target)), `${name} links to an existing file: ${target}`)
+    }
+  }
+})
+
 await check('client module declares its inject face', async () => {
   assert.equal(typeof clientExports.apply, 'function')
   assert.deepEqual(clientExports.inject, ['slots', 'locale', 'sessions', 'uiWorkspace', 'layout'])
