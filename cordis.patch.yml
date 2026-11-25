@@ -1,4 +1,4 @@
 - insert:
-    - id: bot-team
-      name: '@local/bot-team'
+    - id: bots-team
+      name: 'dsh-bots-team'
       config: {}

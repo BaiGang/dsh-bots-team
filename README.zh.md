@@ -46,7 +46,7 @@ DSH 本来就很会跑 agent；消息应用形状的团队补的是"把它们放
 需要带 Web 界面的 DSH profile（面板是浏览器插件），DSH 版本 `0.2.x` 及以上。
 
 ```sh
-git clone https://github.com/BaiGang/dsh-bot-team.git
+git clone https://github.com/BaiGang/dsh-bots-team.git
 ```
 
 在 DSH 里打开 **插件 → 添加插件**，选择克隆下来的目录。bundle 会立即激活；随后刷新页面，让新的浏览器 bundle 进入启动图，左侧栏就会出现 **团队**。
@@ -54,10 +54,10 @@ git clone https://github.com/BaiGang/dsh-bot-team.git
 插件行支持一个可选配置：
 
 ```yaml
-- id: bot-team
-  name: '@local/bot-team'
+- id: bots-team
+  name: 'dsh-bots-team'
   config:
-    dataDir: /absolute/path/to/team-data   # 默认：$DSH_HOME/bot-team
+    dataDir: /absolute/path/to/team-data   # 默认：$DSH_HOME/bots-team
 ```
 
 ## 使用
@@ -81,9 +81,9 @@ git clone https://github.com/BaiGang/dsh-bot-team.git
 
 ## 数据位置
 
-- 名册：`$DSH_HOME/bot-team/team.json`（默认 `~/.dsh/bot-team/team.json`）。
-- 机器人文件夹：`$DSH_HOME/bot-team/bots/<bot-id>/`，每个含 `AGENTS.md` 与 `.git` 指令根标记。
-- 面板通过回环接口 `/bot-team/api` 与 Host 半通信。
+- 名册：`$DSH_HOME/bots-team/team.json`（默认 `~/.dsh/bots-team/team.json`）。
+- 机器人文件夹：`$DSH_HOME/bots-team/bots/<bot-id>/`，每个含 `AGENTS.md` 与 `.git` 指令根标记。
+- 面板通过回环接口 `/bots-team/api` 与 Host 半通信。
 
 删除机器人只把它移出名册；文件夹、文件、会话都保留，所以删除是可恢复的。
 
@@ -91,7 +91,7 @@ git clone https://github.com/BaiGang/dsh-bot-team.git
 
 | 文件 | 作用 |
 |---|---|
-| [`index.js`](index.js) | Host 半：名册存储、机器人文件夹与 `AGENTS.md`、`/bot-team/api`、代理工具。 |
+| [`index.js`](index.js) | Host 半：名册存储、机器人文件夹与 `AGENTS.md`、`/bots-team/api`、代理工具。 |
 | [`client.js`](client.js) | 浏览器半：`sidebar.panellist` 入口与 `main` 面板，一个 `__ModuleLoader__` 工厂。 |
 | [`cordis.patch.yml`](cordis.patch.yml) | 插入 Host 行的 bundle 补丁。 |
 | [`locale/`](locale) | 插件管理器的标题、描述与详情文档路径。 |

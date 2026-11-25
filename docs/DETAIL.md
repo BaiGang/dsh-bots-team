@@ -45,8 +45,8 @@ The Host half also registers four tools, so an agent can manage the same roster:
 
 ## Where the data lives
 
-- Roster: `$DSH_HOME/bot-team/team.json` (`~/.dsh/bot-team/team.json` by default).
-- Bot folders: `$DSH_HOME/bot-team/bots/<bot-id>/`, each with `AGENTS.md` and a
+- Roster: `$DSH_HOME/bots-team/team.json` (`~/.dsh/bots-team/team.json` by default).
+- Bot folders: `$DSH_HOME/bots-team/bots/<bot-id>/`, each with `AGENTS.md` and a
   `.git` directory that marks the folder as its own instruction root so guidance
   from parent directories does not leak in.
 - Row config `dataDir` moves both elsewhere.
@@ -57,7 +57,7 @@ session are left alone, so a removal is recoverable.
 ## Limits
 
 - The panel talks to the Host half over a loopback HTTP endpoint
-  (`/bot-team/api`). It answers same-origin browser requests on the machine that
+  (`/bots-team/api`). It answers same-origin browser requests on the machine that
   runs DSH; a page served from another origin is refused. A desktop shell that
   loads the client from `file://` cannot reach it, so the panel reports that the
   roster endpoint did not answer.

@@ -9,20 +9,20 @@
  * message here is `session.prompt()`, exactly what the composer does, so the
  * reply streams into this panel and into the bot's own conversation alike.
  *
- * @module @local/bot-team/client
+ * @module dsh-bots-team/client
  */
 window.__ModuleLoader__.load({
-  id: '@local/bot-team',
+  id: 'dsh-bots-team',
   factory(require) {
     const React = require('react')
     const h = React.createElement
 
     /** Id shared by the sidebar entry and the main panel it opens. */
-    const PANEL_ID = 'bot-team'
+    const PANEL_ID = 'bots-team'
     /** Locale namespace owned by this plugin. */
-    const NS = 'botTeam'
+    const NS = 'botsTeam'
     /** Roster endpoint served by this plugin's Host half. */
-    const API = 'bot-team/api'
+    const API = 'bots-team/api'
 
     const EN = {
       panel: 'Team',
@@ -221,7 +221,7 @@ window.__ModuleLoader__.load({
           try {
             listener()
           } catch (error) {
-            console.error('[bot-team] listener failed', error)
+            console.error('[bots-team] listener failed', error)
           }
         }
       }
@@ -309,7 +309,7 @@ window.__ModuleLoader__.load({
       async openConversation(bot) {
         let reference
         try {
-          reference = this.ctx.sessions.retain(bot.sessionId, { source: 'botTeam' })
+          reference = this.ctx.sessions.retain(bot.sessionId, { source: 'botsTeam' })
         } catch (error) {
           this.set({ notice: String(error?.message ?? error) })
           return
@@ -929,10 +929,10 @@ window.__ModuleLoader__.load({
      * @param {object} ctx - Client context.
      */
     function apply(ctx) {
-      ctx.effect(() => ctx.locale.register(NS, { en: EN, zh: ZH }), 'bot-team: dictionaries')
+      ctx.effect(() => ctx.locale.register(NS, { en: EN, zh: ZH }), 'bots-team: dictionaries')
       const t = ctx.locale.bind(NS)
       const controller = new TeamController(ctx, t)
-      ctx.effect(() => () => controller.dispose(), 'bot-team: controller')
+      ctx.effect(() => () => controller.dispose(), 'bots-team: controller')
 
       ctx.effect(() => ctx.slots.inject('main', () => {
         const dispose = ctx.slots.register({
@@ -949,7 +949,7 @@ window.__ModuleLoader__.load({
           off()
           dispose()
         }
-      }), 'bot-team: panel')
+      }), 'bots-team: panel')
 
       ctx.effect(() => ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
         name: 'sidebar.panellist',
@@ -957,7 +957,7 @@ window.__ModuleLoader__.load({
         order: 6,
         label: () => t('panel'),
         locale: NS,
-      }, TeamIcon)), 'bot-team: sidebar entry')
+      }, TeamIcon)), 'bots-team: sidebar entry')
     }
 
     return { inject, apply }

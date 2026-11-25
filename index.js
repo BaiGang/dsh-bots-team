@@ -11,7 +11,7 @@
  * Deliberately dependency-free: this module imports Node built-ins only, so it
  * resolves whatever profile installs it.
  *
- * @module @local/bot-team
+ * @module dsh-bots-team
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -20,12 +20,12 @@ import os from 'node:os'
 import path from 'node:path'
 
 /** Cordis plugin name. */
-export const name = 'bot-team'
+export const name = 'bots-team'
 /** The route registry and the tool registry this plugin contributes to. */
 export const inject = ['webServer', 'tools']
 
 /** Route prefix owned by this plugin. */
-const API_PREFIX = '/bot-team/api'
+const API_PREFIX = '/bots-team/api'
 /** Roster schema version written into `team.json`. */
 const TEAM_VERSION = 1
 /** Default working posture appended to every persona. */
@@ -193,7 +193,7 @@ class TeamStore {
     try {
       parsed = JSON.parse(await readFile(this.file, 'utf8'))
     } catch (error) {
-      if (error?.code !== 'ENOENT') this.warn(`bot-team: unreadable roster (${String(error?.message ?? error)}); starting a fresh one`)
+      if (error?.code !== 'ENOENT') this.warn(`bots-team: unreadable roster (${String(error?.message ?? error)}); starting a fresh one`)
     }
     const state = this.normalize(parsed)
     if (state.bots.length === 0) this.seed(state)
@@ -593,25 +593,25 @@ export function apply(ctx, config = {}) {
   }
   const root = typeof config?.dataDir === 'string' && config.dataDir.trim() !== ''
     ? path.resolve(config.dataDir)
-    : path.join(harnessHome(), 'bot-team')
+    : path.join(harnessHome(), 'bots-team')
   const store = new TeamStore(root, warn)
 
   // Warm the roster (and its folders) without blocking activation.
-  void store.load().catch(error => warn(`bot-team: roster unavailable (${String(error?.message ?? error)})`))
+  void store.load().catch(error => warn(`bots-team: roster unavailable (${String(error?.message ?? error)})`))
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: API_PREFIX,
     handler: (req, res) => handle(req, res, store),
-  }), 'bot-team: roster endpoint')
+  }), 'bots-team: roster endpoint')
 
   if (typeof ctx.tools?.register !== 'function') return
   try {
     for (const tool of teamTools(store)) {
-      ctx.effect(() => ctx.tools.register(tool), `bot-team: ${tool.name}`)
+      ctx.effect(() => ctx.tools.register(tool), `bots-team: ${tool.name}`)
     }
   } catch (error) {
-    warn(`bot-team: tools unavailable (${String(error?.message ?? error)})`)
+    warn(`bots-team: tools unavailable (${String(error?.message ?? error)})`)
   }
 }
 

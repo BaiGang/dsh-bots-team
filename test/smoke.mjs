@@ -1,5 +1,5 @@
 /**
- * Smoke tests for the bot-team bundle, run without a browser.
+ * Smoke tests for the bots-team bundle, run without a browser.
  *
  * The Host half is exercised through the route it registers (a fake Node
  * request pair over the real handler) and against a temporary data directory.
@@ -37,10 +37,10 @@ const hostCtx = {
   webServer: { register: (route) => { routes.push(route); return () => {} } },
   tools: { register: (tool) => { tools.push(tool); return () => {} } },
 }
-const configDir = await mkdtemp(path.join(os.tmpdir(), 'bot-team-wired-'))
+const configDir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-wired-'))
 host.apply(hostCtx, { dataDir: configDir })
 
-const dataDir = await mkdtemp(path.join(os.tmpdir(), 'bot-team-test-'))
+const dataDir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-test-'))
 const store = new host.TeamStore(dataDir, () => {})
 
 /**
@@ -55,12 +55,12 @@ const request = (pathname, init = {}) => host.dispatch({
   body: init.body ?? '',
 }, store)
 const post = (body, headers = { 'content-type': 'application/json' }) =>
-  request('/bot-team/api/bots', { method: 'POST', headers, body: JSON.stringify(body) })
+  request('/bots-team/api/bots', { method: 'POST', headers, body: JSON.stringify(body) })
 
 await check('registers one prefix route with a raw handler and four tools', async () => {
   assert.equal(routes.length, 1)
   assert.equal(routes[0].kind, 'prefix')
-  assert.equal(routes[0].path, '/bot-team/api')
+  assert.equal(routes[0].path, '/bots-team/api')
   assert.equal(typeof routes[0].handler, 'function', 'writes need a handler; a resource only sees GET and HEAD')
   assert.deepEqual(tools.map(tool => tool.name), ['team_roster', 'team_hire', 'team_brief', 'team_fire'])
   assert.doesNotThrow(() => JSON.stringify(tools[0].parameters))
@@ -71,7 +71,7 @@ await check('the wired route answers a real request pair', async () => {
   const headers = {}
   const req = {
     method: 'GET',
-    url: '/bot-team/api/state',
+    url: '/bots-team/api/state',
     headers: {},
     async *[Symbol.asyncIterator]() { for (const chunk of chunks) yield Buffer.from(chunk) },
   }
@@ -88,7 +88,7 @@ await check('the wired route answers a real request pair', async () => {
 })
 
 await check('seeds a team on first run', async () => {
-  const { status, body } = await request('/bot-team/api/state')
+  const { status, body } = await request('/bots-team/api/state')
   assert.equal(status, 200)
   assert.equal(body.ok, true)
   assert.deepEqual(body.state.bots.map(bot => bot.id), ['scout', 'forge', 'ledger'])
@@ -124,14 +124,14 @@ await check('updates persona and binds a session', async () => {
 
 await check('rejects unknown operations, wrong methods, and unsafe requests', async () => {
   assert.equal((await post({ op: 'launch' })).status, 400)
-  assert.equal((await request('/bot-team/api/state', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403)
-  assert.equal((await request('/bot-team/api/bots')).status, 405)
+  assert.equal((await request('/bots-team/api/state', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403)
+  assert.equal((await request('/bots-team/api/bots')).status, 405)
   assert.equal((await post({ op: 'create' }, { 'content-type': 'text/plain' })).status, 415)
   const crossOrigin = { 'content-type': 'application/json', origin: 'http://evil.test', host: '127.0.0.1:58595' }
   assert.equal((await post({ op: 'create' }, crossOrigin)).status, 403)
   const sameOrigin = { 'content-type': 'application/json', origin: 'http://127.0.0.1:58595', host: '127.0.0.1:58595' }
   assert.equal((await post({ op: 'create' }, sameOrigin)).status, 500, 'same-origin is admitted and then fails validation')
-  assert.equal((await request('/bot-team/api/nope')).status, 404)
+  assert.equal((await request('/bots-team/api/nope')).status, 404)
 })
 
 await check('reports a bot it cannot find instead of throwing', async () => {
@@ -160,7 +160,7 @@ await check('agent tools read and mutate the same roster', async () => {
 })
 
 await check('survives a corrupt roster file', async () => {
-  const broken = await mkdtemp(path.join(os.tmpdir(), 'bot-team-broken-'))
+  const broken = await mkdtemp(path.join(os.tmpdir(), 'bots-team-broken-'))
   const { writeFile } = await import('node:fs/promises')
   await writeFile(path.join(broken, 'team.json'), '{not json', 'utf8')
   const repaired = new host.TeamStore(broken, () => {})
@@ -199,7 +199,7 @@ const react = createReactShim()
 let captured
 globalThis.window = { __ModuleLoader__: { load: (registration) => { captured = registration } } }
 await import('../client.js')
-assert.equal(captured.id, '@local/bot-team')
+assert.equal(captured.id, 'dsh-bots-team')
 const clientExports = captured.factory((specifier) => {
   if (specifier === 'react') return react
   throw new Error(`unexpected external import: ${specifier}`)
@@ -237,13 +237,13 @@ await check('registers a sidebar entry and a main panel under one id', async () 
   const main = registrations.find(entry => entry.options.name === 'main')
   assert.ok(sidebar, 'sidebar.panellist registration missing')
   assert.ok(main, 'main registration missing')
-  assert.equal(sidebar.options.id, 'bot-team')
-  assert.equal(main.options.key, 'bot-team')
+  assert.equal(sidebar.options.id, 'bots-team')
+  assert.equal(main.options.key, 'bots-team')
   assert.equal(sidebar.options.id, main.options.key, 'the entry id must address the panel key')
   assert.equal(sidebar.options.label(), 'Team')
   assert.equal(typeof sidebar.component, 'function')
   assert.equal(typeof main.options.inject, 'function')
-  assert.equal(localeDict.botTeam.zh.panel, '团队')
+  assert.equal(localeDict.botsTeam.zh.panel, '团队')
 })
 
 const controller = registrations.find(entry => entry.options.name === 'main').options.inject().controller
@@ -293,7 +293,7 @@ await check('renders the loading state before the roster arrives', async () => {
 
 await check('renders the roster and the selected bot once the Host answers', async () => {
   globalThis.fetch = async (url) => {
-    assert.match(String(url), /\/bot-team\/api\/state$/u)
+    assert.match(String(url), /\/bots-team\/api\/state$/u)
     return {
       ok: true,
       status: 200,

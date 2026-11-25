@@ -63,7 +63,7 @@ Requires a DSH profile with the Web GUI (the panel is a browser plugin) and DSH
 `0.2.x` or newer.
 
 ```sh
-git clone https://github.com/BaiGang/dsh-bot-team.git
+git clone https://github.com/BaiGang/dsh-bots-team.git
 ```
 
 Then open **Plugins → Add plugin** in DSH and choose the cloned directory. The
@@ -73,10 +73,10 @@ boot graph, and **Team** appears in the left sidebar.
 The plugin row accepts one optional config field:
 
 ```yaml
-- id: bot-team
-  name: '@local/bot-team'
+- id: bots-team
+  name: 'dsh-bots-team'
   config:
-    dataDir: /absolute/path/to/team-data   # default: $DSH_HOME/bot-team
+    dataDir: /absolute/path/to/team-data   # default: $DSH_HOME/bots-team
 ```
 
 ## Use it
@@ -103,10 +103,10 @@ bot shows up in the panel on its next refresh.
 
 ## Where the data lives
 
-- Roster: `$DSH_HOME/bot-team/team.json` (`~/.dsh/bot-team/team.json` by default).
-- Bot folders: `$DSH_HOME/bot-team/bots/<bot-id>/`, each with `AGENTS.md` and the
+- Roster: `$DSH_HOME/bots-team/team.json` (`~/.dsh/bots-team/team.json` by default).
+- Bot folders: `$DSH_HOME/bots-team/bots/<bot-id>/`, each with `AGENTS.md` and the
   `.git` instruction-root marker.
-- The panel talks to the Host half over a loopback endpoint, `/bot-team/api`.
+- The panel talks to the Host half over a loopback endpoint, `/bots-team/api`.
 
 Removing a bot drops it from the roster only. The folder, its files, and its
 Session are left alone, so a removal is recoverable.
@@ -115,7 +115,7 @@ Session are left alone, so a removal is recoverable.
 
 | File | Role |
 |---|---|
-| [`index.js`](index.js) | Host half: roster store, bot folders and `AGENTS.md`, `/bot-team/api`, agent tools. |
+| [`index.js`](index.js) | Host half: roster store, bot folders and `AGENTS.md`, `/bots-team/api`, agent tools. |
 | [`client.js`](client.js) | Browser half: the `sidebar.panellist` entry and the `main` panel, as one `__ModuleLoader__` factory. |
 | [`cordis.patch.yml`](cordis.patch.yml) | The bundle patch that inserts the Host row. |
 | [`locale/`](locale) | Plugin-manager title, description, and detail document path. |

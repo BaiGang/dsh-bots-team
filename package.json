@@ -1,5 +1,5 @@
 {
-  "name": "@local/bot-team",
+  "name": "dsh-bots-team",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -13,13 +13,13 @@
     "ai-agents",
     "chat"
   ],
-  "homepage": "https://github.com/BaiGang/dsh-bot-team#readme",
+  "homepage": "https://github.com/BaiGang/dsh-bots-team#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/BaiGang/dsh-bot-team.git"
+    "url": "git+https://github.com/BaiGang/dsh-bots-team.git"
   },
   "bugs": {
-    "url": "https://github.com/BaiGang/dsh-bot-team/issues"
+    "url": "https://github.com/BaiGang/dsh-bots-team/issues"
   },
   "scripts": {
     "test": "node test/smoke.mjs"
