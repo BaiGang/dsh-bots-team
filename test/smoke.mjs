@@ -594,6 +594,25 @@ await check('disposal releases the retained session', async () => {
   assert.equal(released, 1)
 })
 
+await check('a settled assignment is reported with its own wording', async () => {
+  controller.set({ assignments: [{ id: 'r1', botId: 'scout', botName: 'Scout', task: 'x', status: 'sent' }] })
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      state: {
+        bots: controller.getSnapshot().bots,
+        assignments: [{ id: 'r1', botId: 'scout', botName: 'Scout', task: 'x', status: 'done' }],
+      },
+    }),
+  })
+  await controller.refresh()
+  assert.match(controller.getSnapshot().toast, /Scout finished/u)
+  assert.equal(controller.getSnapshot().assignments[0].status, 'done')
+  controller.set({ assignments: [], toast: '' })
+})
+
 await check('the sidebar icon draws without a background tile', async () => {
   const icon = registrations.find(entry => entry.options.name === 'sidebar.panellist').component
   const wrapper = icon({ size: 20, active: true })

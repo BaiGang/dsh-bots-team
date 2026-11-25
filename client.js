@@ -77,6 +77,7 @@ window.__ModuleLoader__.load({
       dispatched: 'Dispatched to {name}',
       dismissed: 'Proposal dismissed',
       unattendedOn: 'Unattended',
+      finished: '{name} finished',
       pendingMany: '{n} proposals to confirm',
       pendingOne: '1 proposal to confirm',
     }
@@ -134,6 +135,7 @@ window.__ModuleLoader__.load({
       dispatched: '已派发给 {name}',
       dismissed: '已取消该建议',
       unattendedOn: '无人值守',
+      finished: '{name} 做完了',
       pendingMany: '{n} 条待确认',
       pendingOne: '1 条待确认',
     }
@@ -310,7 +312,7 @@ window.__ModuleLoader__.load({
               assignments,
               unattended: state.unattended === true,
             })
-            if (finished !== undefined) this.notify(this.t('dispatched').replace('{name}', finished.botName))
+            if (finished !== undefined) this.notify(this.t('finished').replace('{name}', finished.botName))
           }
         } catch {
           // A transient failure keeps the roster already on screen.
