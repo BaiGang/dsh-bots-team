@@ -28,9 +28,15 @@ survives restarts, and stays readable and editable on disk.
 5. **Edit** changes the name, emoji, role, or instructions. Instructions are
    rewritten to `AGENTS.md` for the next message.
 
-A bot's Session is grouped under a Workspace named after the bot and titled with
-its name, so the sidebar shows the team rather than an untitled conversation in
-the ungrouped list.
+Every bot Session lives in **one shared Workspace** (the roster's own directory)
+and is titled with its bot's name, so the sidebar shows a single "Bot team" group
+with one conversation per bot.
+
+Because the working directory is shared, a bot's persona is not read from the
+directory: the host backend contributes a prompt section per Session that resolves
+the owning bot and stays empty for every other conversation. The same instructions
+are still written to `<bot-folder>/AGENTS.md` for reading and editing, and each bot
+is told to keep its files under `bots/<id>/`.
 
 Four bots exist on first run: **Chief** (chief of staff) pinned first, then the
 starters Scout, Forge, and Ledger. Delete any of them if you would rather start

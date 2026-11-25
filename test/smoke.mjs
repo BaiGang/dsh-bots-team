@@ -68,6 +68,13 @@ const hostCtx = {
   },
   // Workspace + title fakes: record what the host does for a bound Session.
   workspaceRegistry: {
+    list: () => workspaces,
+    delete: async (id) => {
+      const index = workspaces.findIndex(item => item.id === id)
+      if (index === -1) return false
+      workspaces.splice(index, 1)
+      return true
+    },
     create: async (folder, title) => {
       const existing = workspaces.find(item => item.path === folder)
       if (existing !== undefined) return existing
@@ -114,8 +121,7 @@ await check('registers one prefix route, six tools, and the standing team note',
   assert.deepEqual(tools.map(tool => tool.name),
     ['team_roster', 'team_hire', 'team_brief', 'team_fire', 'team_assign', 'team_status'])
   assert.doesNotThrow(() => JSON.stringify(tools[0].parameters))
-  assert.equal(sections.length, 1)
-  assert.equal(sections[0].name, 'bots-team')
+  assert.deepEqual(sections.map(section => section.name), ['bots-team/persona', 'bots-team'])
 })
 
 await check('the wired route answers a real request pair', async () => {
@@ -346,12 +352,15 @@ await check('team_status reports sessions, live agents, and recent assignments',
   assert.ok(report.assignments.some(record => record.status === 'done'))
 })
 
-await check('a bound session is grouped under a workspace named after its bot', async () => {
-  const grouped = workspaces.find(item => item.path.endsWith('/bots/scout'))
-  assert.ok(grouped, 'binding a session creates a workspace for that bot folder')
-  assert.equal(grouped.title, 'Scout')
-  assert.deepEqual(grouped.sessionIds, ['sess-scout'])
-  assert.equal(titles.get('sess-scout'), 'Scout', 'and the untitled conversation is named')
+await check('every bot session lands in the one shared workspace', async () => {
+  assert.equal(workspaces.length, 1, 'the team shares a single workspace')
+  const team = workspaces[0]
+  assert.equal(team.title, 'Bot team')
+  assert.ok(team.path.endsWith('bots-team-wired-') || team.path.length > 0)
+  assert.ok(team.sessionIds.includes('sess-forge'), 'a bound bot session is attached to it')
+  assert.equal(titles.get('sess-scout'), 'Scout', 'and the conversation is named after its bot')
+  const perBot = workspaces.filter(item => item.path.includes('/bots/'))
+  assert.equal(perBot.length, 0, 'no workspace is created per bot')
 })
 
 await check('the same bot is not renamed twice', async () => {
@@ -371,8 +380,21 @@ await check('a bot with no session gets no workspace', async () => {
   assert.equal(lonely, undefined, 'nothing is created until a conversation exists')
 })
 
+await check('a bot session receives its own persona, and nothing else does', async () => {
+  const persona = sections.find(section => section.name === 'bots-team/persona')
+  assert.ok(persona, 'the persona section is registered')
+  const asSession = (id) => ({ agent: { session: { id } } })
+
+  const text = persona.text(asSession('sess-scout'))
+  assert.match(text, /You are \*\*Scout\*\*/u)
+  assert.match(text, /bots\/scout/u)
+  assert.equal(persona.text(asSession('sess-not-a-bot')), '', 'a session outside the roster gets nothing')
+  assert.equal(persona.text({}), '', 'an assembly with no agent gets nothing')
+})
+
 await check('the standing note names the team and the confirmation gate', async () => {
-  const text = sections[0].text({})
+  const guidance = sections.find(section => section.name === 'bots-team')
+  const text = guidance.text({})
   assert.match(text, /Bot team/u)
   assert.match(text, /Scout/u)
   assert.match(text, /chief of staff/u)

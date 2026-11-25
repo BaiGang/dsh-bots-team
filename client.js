@@ -445,15 +445,22 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * Give a bot a Session, creating and binding one when it has none. A bot
-       * cannot receive work before its first conversation exists.
+       * Give a bot a Session, creating and binding one when it has none. The
+       * Session is created inside the team Workspace, so every bot conversation
+       * shares one home in the sidebar. A bot cannot receive work before its
+       * first conversation exists.
        * @param bot - roster record.
        * @returns The bot with a session id, or undefined when creation failed.
        */
       async ensureSession(bot) {
         if (bot === undefined) return undefined
         if (typeof bot.sessionId === 'string' && bot.sessionId !== '') return bot
-        const sessionId = await this.ctx.sessions.create({ cwd: bot.folder })
+        const workspaceId = this.snapshot.workspaceId
+        const sessionId = await this.ctx.sessions.create(
+          typeof workspaceId === 'string' && workspaceId !== ''
+            ? { workspaceId }
+            : { cwd: this.snapshot.workspacePath ?? bot.folder },
+        )
         const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'bind', botId: bot.id, sessionId }) })
         const bots = this.snapshot.bots.map(candidate => (candidate.id === bot.id ? body.bot : candidate))
         this.set({ bots })

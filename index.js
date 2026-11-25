@@ -32,6 +32,8 @@ const API_PREFIX = '/bots-team/api'
 const TEAM_VERSION = 2
 /** Identifier of the built-in chief of staff. */
 const CHIEF_ID = 'chief'
+/** Title of the one Workspace the whole team shares. */
+const WORKSPACE_TITLE = 'Bot team'
 /** How many assignment records are kept. */
 const ASSIGNMENT_LIMIT = 100
 /** Default working posture appended to every persona. */
@@ -186,6 +188,8 @@ class TeamStore {
     this.waking = new Map()
     /** Set by `apply` from the row configuration. */
     this.unattended = false
+    /** The single Workspace every bot Session lives in. */
+    this.workspace = undefined
   }
 
   /**
@@ -365,6 +369,16 @@ class TeamStore {
     if (current !== body) await writeFile(target, body, 'utf8')
   }
 
+  /**
+   * Find the bot a Session belongs to.
+   * @param sessionId - session identity.
+   * @returns The owning bot, when one is bound to it.
+   */
+  botBySession(sessionId) {
+    if (typeof sessionId !== 'string' || sessionId === '') return undefined
+    return this.state?.bots.find(bot => bot.sessionId === sessionId)
+  }
+
   /** Public, client-safe projection of the roster. */
   snapshot() {
     const state = this.state ?? { version: TEAM_VERSION, team: { name: 'My team', createdAt: 0 }, bots: [], assignments: [] }
@@ -373,6 +387,9 @@ class TeamStore {
       team: { name: state.team.name },
       dataDir: this.root,
       chiefId: state.bots.find(bot => bot.chief === true)?.id ?? CHIEF_ID,
+      workspaceId: this.workspace?.id,
+      workspacePath: this.root,
+      workspaceTitle: WORKSPACE_TITLE,
       unattended: this.unattended === true,
       bots: state.bots.map(bot => ({ ...bot })),
       assignments: state.assignments.map(record => ({ ...record })),
@@ -656,10 +673,11 @@ class TeamStore {
     const sessionId = bot.sessionId
     if (typeof sessionId !== 'string' || sessionId === '') return
     try {
-      const workspace = await this.workspaces?.create?.(bot.folder, bot.name)
+      const workspace = await this.ensureWorkspace()
       if (workspace !== undefined) {
-        if (workspace.title !== bot.name) await workspace.setTitle?.(bot.name)
         const attached = Array.isArray(workspace.sessionIds) && workspace.sessionIds.includes(sessionId)
+        // A Session created before the team Workspace existed keeps its own cwd
+        // and cannot be attached; it stays readable in the session list.
         if (!attached) await workspace.attachSession?.(sessionId)
       }
     } catch (error) {
@@ -680,6 +698,43 @@ class TeamStore {
       })
     } catch (error) {
       this.warn(`bots-team: could not title ${bot.name}'s session (${String(error?.message ?? error)})`)
+    }
+  }
+
+  /**
+   * Resolve the one Workspace the team shares: the roster's own directory, so
+   * every bot Session has the same working directory and the same home.
+   * @returns The Workspace, when the profile has a registry.
+   */
+  async ensureWorkspace() {
+    if (this.workspace !== undefined) return this.workspace
+    const registry = this.workspaces
+    if (registry === undefined || typeof registry.create !== 'function') return undefined
+    const workspace = await registry.create(this.root, WORKSPACE_TITLE)
+    if (workspace === undefined) return undefined
+    if (workspace.title !== WORKSPACE_TITLE) await workspace.setTitle?.(WORKSPACE_TITLE)
+    this.workspace = workspace
+    return workspace
+  }
+
+  /**
+   * Delete Workspaces that earlier versions created for a single bot folder.
+   * Scoped to paths under this roster's own directory, so no other Workspace is
+   * ever considered; the shared Workspace sits exactly at the root and is kept.
+   */
+  async prunePerBotWorkspaces() {
+    const registry = this.workspaces
+    if (registry === undefined || typeof registry.list !== 'function' || typeof registry.delete !== 'function') return
+    const prefix = `${this.root}${path.sep}`
+    for (const workspace of registry.list()) {
+      const workspacePath = workspace?.path
+      if (typeof workspacePath !== 'string') continue
+      if (!workspacePath.startsWith(prefix)) continue
+      try {
+        await registry.delete(workspace.id)
+      } catch (error) {
+        this.warn(`bots-team: could not drop a per-bot workspace (${String(error?.message ?? error)})`)
+      }
     }
   }
 
@@ -1025,6 +1080,30 @@ function teamTools(store, unattended) {
 }
 
 /**
+ * The text a bot Session receives as its own instructions. With one shared
+ * Workspace the working directory no longer identifies the bot, so the persona
+ * arrives through a section registered on that agent instead of `AGENTS.md`.
+ * @param bot - the bot the Session belongs to.
+ * @returns Prompt text.
+ */
+function botPersona(bot) {
+  const lines = [
+    `# ${bot.name}${bot.role === '' ? '' : ` — ${bot.role}`}`,
+    '',
+    `You are **${bot.name}**, one bot on a team of AI bots. You are talking to the person who owns the team.`,
+  ]
+  if (bot.persona !== '') lines.push('', bot.persona)
+  lines.push(
+    '',
+    `The team shares one working directory. Where you write files is your own call, but keep them in \`bots/${bot.id}/\` under the current directory and prefer explicit paths; do not change the session's working directory.`,
+    '',
+    BOT_RULES,
+    '',
+  )
+  return lines.join('\n')
+}
+
+/**
  * The standing team note every Session in the profile receives, so any
  * conversation knows the roster exists and who to hand work to.
  * @param store - roster store.
@@ -1073,6 +1152,8 @@ export function apply(ctx, config = {}) {
   // Warm the roster (and its folders) without blocking activation, then give
   // every bot that already has a conversation its Workspace and title.
   void store.load()
+    .then(() => store.ensureWorkspace())
+    .then(() => store.prunePerBotWorkspaces())
     .then(() => store.migrate())
     .catch(error => warn(`bots-team: roster unavailable (${String(error?.message ?? error)})`))
 
@@ -1081,6 +1162,22 @@ export function apply(ctx, config = {}) {
     path: API_PREFIX,
     handler: (req, res) => handle(req, res, store),
   }), 'bots-team: roster endpoint')
+
+  // One shared Workspace means the working directory no longer identifies the
+  // bot, so each Session's persona is contributed by a section that reads the
+  // Session being assembled and stays empty for anything that is not a bot.
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: 'bots-team/persona',
+    order: 30,
+    text: (context) => {
+      try {
+        const bot = store.botBySession(context?.agent?.session?.id)
+        return bot === undefined ? '' : botPersona(bot)
+      } catch {
+        return ''
+      }
+    },
+  }), 'bots-team: bot persona')
 
   if (config?.guidance !== false) {
     ctx.effect(() => ctx.systemPrompt.section({

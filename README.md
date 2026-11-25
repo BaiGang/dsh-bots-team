@@ -26,13 +26,13 @@ The roster has a **chief of staff**: one bot whose job is to take a request, nam
 
 The panel acts as a messenger interface over native DSH Sessions rather than a separate runtime. Sending a message here invokes `session.prompt()` — the exact same path used by the main composer — so replies stream into both this panel and the bot's native session simultaneously. Clicking **Open chat** hands you the full DSH workspace (tools, approvals, files, and terminals) whenever you need deeper control.
 
-## How It Works: Folder-Backed Personas
+## How It Works: One Workspace, One Persona per Session
 
-When you create a bot, the host backend writes its instructions directly to `<bot-folder>/AGENTS.md`. Because DSH's native workspace loader automatically reads `AGENTS.md` for every session started in that directory:
+The whole team lives in **one Workspace** — the roster's own directory — so the sidebar shows a single group with one conversation per bot, named after that bot. Inside it:
 
-- **Zero prompt hacks** — Personas load through DSH's native instruction mechanism rather than fragile system-prompt injections.
-- **Plain-text persistence** — Instructions survive restarts and remain readable, diffable, and editable right on disk.
-- **Clean context isolation** — Each bot folder includes a `.git` root marker, preventing parent directory `AGENTS.md` instructions from leaking in.
+- **A persona per Session** — the host backend contributes a prompt section that reads the bot the Session belongs to and stays empty for any other conversation, so no other Session picks up a bot's character.
+- **Plain-text persistence** — the same instructions are written to `<bot-folder>/AGENTS.md`, readable, diffable, and editable on disk.
+- **A folder of its own for files** — each bot keeps `bots/<id>/` for the files it makes; the plugin tells it that path in its persona.
 
 ## How Work Gets Handed Out
 
@@ -54,7 +54,7 @@ A delivery that could not start — usually because a bot has no conversation ye
 - **Sidebar integration** — Adds a global **Team** icon (two bot heads) to the left sidebar and opens the roster view in the main column.
 - **A chief of staff** — a built-in bot, pinned first in the roster, that decomposes a request and proposes assignments. Fired by accident, it is hired again on the next start, and its folder keeps the conversation.
 - **A confirmation gate** — proposals wait in the panel until you dispatch them; the sidebar entry shows how many are waiting, and each dispatch lands in the target bot's own session.
-- **Named in the sidebar** — a bot's conversation is grouped under a Workspace named after the bot, and the Session carries the bot's name as its title, so the list reads as a team instead of untitled chats in an ungrouped bucket.
+- **Named in the sidebar** — one **Bot team** Workspace holds every bot conversation, each titled with its bot's name, instead of an untitled chat in an ungrouped bucket.
 - **Live roster** — Displays each bot's avatar, name, role, and real-time working/idle indicator. Auto-refreshes while open, so bots hired from other windows or chats appear automatically.
 - **Inline chat** — Includes a message transcript, tool-call chips, live status indicator, and a composer wired directly into the underlying DSH Session.
 - **Lazy session startup** — A bot's Session is created on its first message inside its dedicated folder, ensuring `AGENTS.md` instructions are loaded before its first turn.
@@ -167,6 +167,7 @@ The test suite exercises the HTTP routes via mocked Node request/response pairs,
 
 ## Known Limitations
 
+- **One shared working directory:** every bot Session runs in the roster directory, so a bot that changes its own working directory leaves the group.
 - **Requires HTTP loopback:** Desktop shells serving the UI over `file://` cannot reach `/bots-team/api` (the panel displays an explicit notice in this environment).
 - **Profile-scoped:** One roster is shared across the active DSH profile rather than scoped per project.
 - **Single thread per bot:** Each bot maintains one continuous conversation. Starting fresh requires hiring a new bot, while conversation forking must be done from the main session list.
