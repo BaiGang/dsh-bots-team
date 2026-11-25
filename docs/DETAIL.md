@@ -27,6 +27,10 @@ survives restarts, and stays readable and editable on disk.
    the full DSH surface (tools, approvals, files, terminals) is available.
 5. **Edit** changes the name, emoji, role, or instructions. Instructions are
    rewritten to `AGENTS.md` for the next message.
+6. **Start a new conversation** in the editor archives the conversation the bot
+   owns (stopping it first if it is still working) and clears the binding, so the
+   next message opens a fresh one in the team Workspace. The archived conversation
+   stays recoverable.
 
 Every bot Session lives in **one shared Workspace** (the roster's own directory)
 and is titled with its bot's name, so the sidebar shows a single "Bot team" group

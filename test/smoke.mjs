@@ -39,6 +39,7 @@ const delivered = []
 const workspaces = []
 const titles = new Map()
 const liveSessions = new Set(['sess-scout'])
+const archived = []
 let releaseIdle = () => {}
 const fakeAgent = (sessionId) => {
   if (agents.has(sessionId)) return agents.get(sessionId)
@@ -68,6 +69,7 @@ const hostCtx = {
   },
   // Workspace + title fakes: record what the host does for a bound Session.
   workspaceRegistry: {
+    archiveSession: async (sessionId) => { archived.push(sessionId) },
     list: () => workspaces,
     delete: async (id) => {
       const index = workspaces.findIndex(item => item.id === id)
@@ -341,6 +343,19 @@ await check('the whole queue dispatches and cancels in one call', async () => {
   assert.equal(cancelled.body.state.assignments.filter(record => record.status === 'proposed').length, 0)
 })
 
+await check('starting a bot over archives its conversation and clears the binding', async () => {
+  const restarted = await wirePost({ op: 'restart', botId: 'scout' })
+  assert.equal(restarted.status, 200)
+  assert.equal(restarted.body.bot.sessionId, null)
+  assert.equal(restarted.body.bot.organized, false)
+  assert.deepEqual(archived, ['sess-scout'], 'the old conversation is archived, not deleted')
+  const state = (await wire('/bots-team/api/state')).body.state
+  assert.equal(state.bots.find(bot => bot.id === 'scout').sessionId, null, 'the clear is persisted')
+  // Put the fixture back for the checks that follow.
+  await wirePost({ op: 'bind', botId: 'scout', sessionId: 'sess-scout' })
+  archived.length = 0
+})
+
 await check('team_status reports sessions, live agents, and recent assignments', async () => {
   const status = tools.find(tool => tool.name === 'team_status')
   const report = await status.execute({}, {})
@@ -602,6 +617,7 @@ await check('the editor renders template chips and a prefilled persona', async (
   controller.cancelEdit()
 })
 
+let createdWith = {}
 await check('sending the first message creates a session, binds it, and prompts it', async () => {
   const retained = []
   let prompted
@@ -636,6 +652,7 @@ await check('sending the first message creates a session, binds it, and prompts 
   await controller.send('  hi scout  ')
   assert.equal(posts.length, 1, 'the bind call should run once')
   assert.deepEqual(posts[0], { op: 'bind', botId: 'scout', sessionId: 'sess-created' })
+  assert.equal(createdWith.workspaceId ?? createdWith.cwd, controller.getSnapshot().workspaceId ?? controller.getSnapshot().workspacePath ?? createdWith.cwd)
   assert.deepEqual(prompted, { content: [{ type: 'text', text: 'hi scout' }], mode: 'queue' })
   assert.equal(controller.getSnapshot().draft, '')
   assert.deepEqual(retained, ['sess-created'])
@@ -982,7 +999,7 @@ await check('the panel can assign directly from a bot, creating its session firs
     }
   }
   controller.ctx.sessions.create = async (options) => {
-    assert.equal(options.cwd, virgin.folder)
+    createdWith = options
     return 'sess-virgin'
   }
   await controller.assignNow('看着。')

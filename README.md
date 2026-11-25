@@ -59,6 +59,7 @@ A delivery that could not start — usually because a bot has no conversation ye
 - **Inline chat** — Includes a message transcript that renders Markdown (headings, lists, tables, fenced code, quotes, links) as real elements — never as injected HTML — plus tool-call chips, a live status indicator, and a composer wired into the underlying DSH Session.
 - **Lazy session startup** — A bot's Session is created on its first message inside its dedicated folder, ensuring `AGENTS.md` instructions are loaded before its first turn.
 - **Built-in role templates** — Ships with **Scout** (Researcher), **Forge** (Builder), **Ledger** (Analyst), and **Quill** (Writer). Three starter bots are pre-hired on first launch.
+- **Start a bot over** — archives the conversation a bot owns and clears the binding, so the next message opens a fresh conversation in the team workspace; the old one stays recoverable in the session archive.
 - **Agent-manageable** — Built-in agent tools let any DSH chat hire, brief, or fire bots conversationally.
 - **Bilingual UI** — Supports English and Simplified Chinese (`简体中文`), automatically matching your DSH locale.
 

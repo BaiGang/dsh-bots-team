@@ -473,6 +473,37 @@ class TeamStore {
   }
 
   /**
+   * Start a bot over: archive the conversation it owns and clear the binding, so
+   * the next message creates a fresh Session in the team Workspace. The archived
+   * conversation stays recoverable in the session archive.
+   * @param botId - bot identity.
+   * @returns The bot with no Session bound.
+   */
+  async restart(botId) {
+    await this.load()
+    const bot = this.state?.bots.find(candidate => candidate.id === botId)
+    if (bot === undefined) throw new Error(`unknown bot "${botId}"`)
+    const sessionId = bot.sessionId
+    if (typeof sessionId === 'string' && sessionId !== '') {
+      try {
+        // A bot that is mid-task refuses an archive unless its work is stopped;
+        // starting over is exactly the case where stopping is intended.
+        await this.workspaces?.archiveSession?.(sessionId, { stopActivity: true })
+      } catch (error) {
+        this.warn(`bots-team: could not archive ${bot.name}'s conversation (${String(error?.message ?? error)})`)
+      }
+    }
+    return this.mutate(async (state) => {
+      const stored = state.bots.find(candidate => candidate.id === botId)
+      stored.sessionId = null
+      stored.organized = false
+      stored.updatedAt = Date.now()
+      await this.write(state)
+      return stored
+    })
+  }
+
+  /**
    * Record one or more proposed assignments without delivering them.
    * @param items - `{ botId, task }` records.
    * @param source - who proposed: `chief`, `agent`, or `panel`.
@@ -837,6 +868,7 @@ async function dispatchRequest(request, store) {
       }
       else if (op === 'cancelAll') result = { cancelled: await store.cancelAll() }
       else if (op === 'reopen') result = { assignment: await store.reopen(String(body.assignmentId ?? '')) }
+      else if (op === 'restart') result = { bot: await store.restart(String(body.botId ?? '')) }
       else return reply(400, { ok: false, error: `unknown op "${op}"` })
       return reply(200, { ok: true, ...result, state: store.snapshot() })
     }

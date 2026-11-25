@@ -64,6 +64,9 @@ window.__ModuleLoader__.load({
       offline: 'The roster endpoint did not answer. The Team panel needs the Host plugin; reload after it is enabled.',
       you: 'You',
       bot: 'Bot',
+      restart: 'Start a new conversation',
+      restartHint: 'Archives the current conversation and starts fresh in the team workspace.',
+      restarted: '{name} will start a new conversation',
       removeAction: 'Remove from team',
       emptyChat: 'No messages yet.',
       chiefBadge: 'Chief of staff',
@@ -130,6 +133,9 @@ window.__ModuleLoader__.load({
       offline: '团队名册接口没有响应。这个面板需要 Host 插件，启用后请刷新页面。',
       you: '你',
       bot: '机器人',
+      restart: '开始新对话',
+      restartHint: '归档当前对话，下次在团队工作区里开一条新的。',
+      restarted: '{name} 下次会开新对话',
       removeAction: '移出团队',
       emptyChat: '还没有消息。',
       chiefBadge: '参谋长',
@@ -605,11 +611,11 @@ window.__ModuleLoader__.load({
         this.drafts.set(bot.id, '')
         try {
           if (typeof bot.sessionId !== 'string' || bot.sessionId === '') {
-            const sessionId = await this.ctx.sessions.create({ cwd: bot.folder })
-            const bound = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'bind', botId: bot.id, sessionId }) })
-            const bots = this.snapshot.bots.map(candidate => (candidate.id === bot.id ? bound.bot : candidate))
-            this.set({ bots })
-            await this.openConversation(bound.bot)
+            // One path for every first message: the team Workspace, the bot's
+            // own title, and a binding the rest of the panel can see.
+            const bound = await this.ensureSession(bot)
+            if (bound === undefined) throw new Error('could not open a conversation for this bot')
+            await this.openConversation(bound)
             const ready = this.conversation
             if (ready !== undefined) await ready.reference.ready
           }
@@ -659,6 +665,23 @@ window.__ModuleLoader__.load({
           this.closeConversation()
           this.set({ bots, editing: undefined, selectedId: undefined, rows: [], running: false })
           this.select(selected ?? bots[0]?.id)
+        } catch (error) {
+          this.set({ notice: String(error?.message ?? error) })
+        }
+      }
+
+      /**
+       * Archive the selected bot's conversation and clear its binding.
+       * @param botId - bot identity.
+       */
+      async restartBot(botId) {
+        try {
+          const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'restart', botId }) })
+          const bots = body.state?.bots ?? this.snapshot.bots
+          this.closeConversation()
+          this.set({ bots, rows: [], running: false, editing: undefined, notice: '' })
+          this.notify(this.t('restarted').replace('{name}', body.bot?.name ?? ''))
+          this.select(this.snapshot.selectedId)
         } catch (error) {
           this.set({ notice: String(error?.message ?? error) })
         }
@@ -799,6 +822,15 @@ window.__ModuleLoader__.load({
             h('span', { className: 'bt-hint' }, t('personaHint'))),
           snapshot.notice !== '' ? h('p', { className: 'bt-error' }, snapshot.notice) : null,
           h('div', { className: 'bt-dialog-actions' },
+            existing !== undefined && typeof existing.sessionId === 'string' && existing.sessionId !== ''
+              ? h('button', {
+                  className: 'bt-btn',
+                  type: 'button',
+                  disabled: busy,
+                  title: t('restartHint'),
+                  onClick: () => { void controller.restartBot(existing.id); onClose() },
+                }, t('restart'))
+              : null,
             existing !== undefined
               ? h('button', {
                   className: 'bt-danger',
