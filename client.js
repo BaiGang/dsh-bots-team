@@ -921,12 +921,198 @@ window.__ModuleLoader__.load({
         h('span', { className: 'bt-pill-go' }, '›')))
     }
 
+    /* ---------------------------------------------------------------- markdown */
+
+    /**
+     * Inline formatting for one run of text: code spans, bold, italic,
+     * strikethrough, and links. Rendered as elements rather than HTML, so a
+     * message can never inject markup into the panel.
+     * @param {string} text - source run.
+     * @param {string} prefix - key prefix for the produced elements.
+     * @returns {Array} vnodes and plain strings.
+     */
+    function inlineMarkdown(text, prefix = 'i') {
+      if (typeof text !== 'string' || text === '') return [text ?? '']
+      const nodes = []
+      const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)|(~~[^~\n]+~~)|(\[[^\]\n]+\]\([^)\s]+\))/gu
+      let last = 0
+      let index = 0
+      for (const match of text.matchAll(pattern)) {
+        if (match.index > last) nodes.push(text.slice(last, match.index))
+        const token = match[0]
+        const key = `${prefix}-${index++}`
+        if (token.startsWith('`')) {
+          nodes.push(h('code', { key, className: 'bt-md-code' }, token.slice(1, -1)))
+        } else if (token.startsWith('**') || token.startsWith('__')) {
+          nodes.push(h('strong', { key }, inlineMarkdown(token.slice(2, -2), key)))
+        } else if (token.startsWith('~~')) {
+          nodes.push(h('del', { key }, inlineMarkdown(token.slice(2, -2), key)))
+        } else if (token.startsWith('*') || token.startsWith('_')) {
+          nodes.push(h('em', { key }, inlineMarkdown(token.slice(1, -1), key)))
+        } else {
+          const link = /^\[([^\]]+)\]\(([^)]+)\)$/u.exec(token)
+          if (link === null) {
+            nodes.push(token)
+          } else {
+            const href = /^(https?:|mailto:)/iu.test(link[2]) ? link[2] : undefined
+            nodes.push(h('a', {
+              key,
+              href,
+              className: 'bt-md-link',
+              target: '_blank',
+              rel: 'noreferrer noopener',
+            }, link[1]))
+          }
+        }
+        last = match.index + token.length
+      }
+      if (last < text.length) nodes.push(text.slice(last))
+      return nodes.length === 0 ? [''] : nodes
+    }
+
+    /** True when a line starts a block the paragraph loop must stop at. */
+    function startsBlock(line) {
+      return /^\s*(```|#{1,4}\s|>|[-*+]\s|\d{1,3}[.)]\s)/u.test(line)
+        || /^\s{0,3}([-*_])(\s*\1){2,}\s*$/u.test(line)
+        || /^\s*\|.*\|\s*$/u.test(line)
+    }
+
+    /** Parsed messages, keyed by source text. Bounded so it cannot grow forever. */
+    const markdownCache = new Map()
+
+    /**
+     * Render a small, dependency-free subset of Markdown as elements: headings,
+     * fenced code, blockquotes, ordered and unordered lists, pipe tables,
+     * rules, and the inline spans above. Nothing is passed to `innerHTML`.
+     * @param {string} source - message text.
+     * @returns {Array} block vnodes.
+     */
+    function markdown(source) {
+      const key = String(source ?? '')
+      const cached = markdownCache.get(key)
+      if (cached !== undefined) return cached
+      const rendered = markdownBlocks(key)
+      if (markdownCache.size > 300) markdownCache.clear()
+      markdownCache.set(key, rendered)
+      return rendered
+    }
+
+    /**
+     * The parse behind {@link markdown}.
+     * @param {string} source - message text.
+     * @returns {Array} block vnodes.
+     */
+    function markdownBlocks(source) {
+      const lines = String(source ?? '').replace(/\r\n?/gu, '\n').split('\n')
+      const blocks = []
+      let i = 0
+      let key = 0
+      const nextKey = () => `b${key++}`
+      while (i < lines.length) {
+        const line = lines[i]
+        if (line.trim() === '') { i += 1; continue }
+
+        const fence = /^\s*```(\S*)\s*$/u.exec(line)
+        if (fence !== null) {
+          const body = []
+          i += 1
+          while (i < lines.length && !/^\s*```\s*$/u.test(lines[i])) { body.push(lines[i]); i += 1 }
+          i += 1
+          blocks.push(h('pre', { key: nextKey(), className: 'bt-md-pre' },
+            h('code', undefined, body.join('\n'))))
+          continue
+        }
+
+        const heading = /^\s{0,3}(#{1,4})\s+(.*)$/u.exec(line)
+        if (heading !== null) {
+          blocks.push(h(`h${Math.min(heading[1].length + 3, 6)}`, { key: nextKey(), className: 'bt-md-h' },
+            inlineMarkdown(heading[2], nextKey())))
+          i += 1
+          continue
+        }
+
+        if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/u.test(line)) {
+          blocks.push(h('hr', { key: nextKey(), className: 'bt-md-hr' }))
+          i += 1
+          continue
+        }
+
+        if (/^\s*\|.*\|\s*$/u.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]*-[\s:|-]*$/u.test(lines[i + 1])) {
+          const split = row => row.replace(/^\s*\|/u, '').replace(/\|\s*$/u, '').split('|').map(cell => cell.trim())
+          const head = split(line)
+          i += 2
+          const rows = []
+          while (i < lines.length && /^\s*\|/u.test(lines[i])) { rows.push(split(lines[i])); i += 1 }
+          blocks.push(h('div', { key: nextKey(), className: 'bt-md-table-wrap' },
+            h('table', { className: 'bt-md-table' },
+              h('thead', undefined, h('tr', undefined, head.map((cell, cellIndex) =>
+                h('th', { key: `th${cellIndex}` }, inlineMarkdown(cell, `th${cellIndex}`))))),
+              h('tbody', undefined, rows.map((row, rowIndex) =>
+                h('tr', { key: `tr${rowIndex}` }, row.map((cell, cellIndex) =>
+                  h('td', { key: `td${cellIndex}` }, inlineMarkdown(cell, `td${rowIndex}-${cellIndex}`)))))))))
+          continue
+        }
+
+        if (/^\s*>\s?/u.test(line)) {
+          const quoted = []
+          while (i < lines.length && /^\s*>\s?/u.test(lines[i])) {
+            quoted.push(lines[i].replace(/^\s*>\s?/u, ''))
+            i += 1
+          }
+          blocks.push(h('blockquote', { key: nextKey(), className: 'bt-md-quote' }, markdown(quoted.join('\n'))))
+          continue
+        }
+
+        const marker = /^(\s*)([-*+]|\d{1,3}[.)])\s+/u.exec(line)
+        if (marker !== null) {
+          const ordered = /\d/u.test(marker[2])
+          const baseIndent = marker[1].length
+          const items = []
+          while (i < lines.length) {
+            const current = /^(\s*)([-*+]|\d{1,3}[.)])\s+/u.exec(lines[i])
+            if (current !== null && current[1].length === baseIndent && /\d/u.test(current[2]) === ordered) {
+              items.push([lines[i].replace(/^(\s*)([-*+]|\d{1,3}[.)])\s+/u, '')])
+              i += 1
+              continue
+            }
+            if (current !== null && current[1].length > baseIndent) {
+              // A nested list: keep it with the item it belongs to.
+              if (items.length > 0) items[items.length - 1].push(lines[i])
+              i += 1
+              continue
+            }
+            if (lines[i].trim() !== '' && items.length > 0 && !startsBlock(lines[i])) {
+              items[items.length - 1].push(lines[i])
+              i += 1
+              continue
+            }
+            break
+          }
+          blocks.push(h(ordered ? 'ol' : 'ul', { key: nextKey(), className: 'bt-md-list' },
+            items.map((item, itemIndex) =>
+              h('li', { key: `li${itemIndex}` }, markdown(item.join('\n'))))))
+          continue
+        }
+
+        const paragraph = []
+        while (i < lines.length && lines[i].trim() !== ''
+          && (paragraph.length === 0 || !startsBlock(lines[i]))) {
+          paragraph.push(lines[i])
+          i += 1
+        }
+        if (paragraph.length > 0) {
+          blocks.push(h('p', { key: nextKey(), className: 'bt-md-p' }, inlineMarkdown(paragraph.join('\n'), nextKey())))
+        }
+      }
+      return blocks
+    }
+
     /** Transcript row. */
     function Bubble({ row, t }) {
       const mine = row.role === 'user'
       return h('div', { className: mine ? 'bt-msg bt-msg-user' : 'bt-msg' },
         h('div', { className: 'bt-bubble' },
-          row.text === '' ? null : h('div', { className: 'bt-text' }, row.text),
+          row.text === '' ? null : h('div', { className: 'bt-text' }, markdown(row.text)),
           row.tools.length === 0 ? null : h('div', { className: 'bt-tools' },
             row.tools.map((tool, index) => h('span', { key: `${tool}-${index}`, className: 'bt-tool' }, tool)))))
     }
@@ -1211,7 +1397,43 @@ window.__ModuleLoader__.load({
   border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; padding: 9px 12px;
 }
 .bt-msg-user .bt-bubble { background: var(--dsw-alias-bg-layer-1); }
-.bt-text { font-size: 13px; line-height: 1.62; white-space: pre-wrap; word-break: break-word; }
+.bt-text { font-size: 13px; line-height: 1.62; word-break: break-word; }
+.bt-text > *:first-child { margin-top: 0; }
+.bt-text > *:last-child { margin-bottom: 0; }
+.bt-md-p { margin: 0 0 8px; white-space: pre-wrap; }
+.bt-md-h { margin: 10px 0 6px; font-weight: 600; line-height: 1.4; }
+h4.bt-md-h { font-size: 13.5px; }
+h5.bt-md-h { font-size: 13px; }
+h6.bt-md-h { font-size: 12.5px; }
+.bt-md-list { margin: 0 0 8px; padding-left: 20px; }
+.bt-md-list > li { margin: 2px 0; }
+.bt-md-list > li > .bt-md-p { margin: 0; }
+.bt-md-list .bt-md-list { margin: 2px 0 0; }
+.bt-md-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+  padding: 1px 4px; border-radius: 4px; background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l1);
+}
+.bt-md-pre {
+  margin: 8px 0; padding: 9px 11px; border-radius: 8px; overflow-x: auto;
+  background: var(--dsw-alias-bg-base); border: 1px solid var(--dsw-alias-border-l1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+  line-height: 1.55; white-space: pre;
+}
+.bt-md-quote {
+  margin: 8px 0; padding: 2px 0 2px 10px; color: var(--dsw-alias-label-secondary);
+  border-left: 3px solid var(--dsw-alias-border-l2);
+}
+.bt-md-hr { margin: 10px 0; border: 0; border-top: 1px solid var(--dsw-alias-border-l1); }
+.bt-md-link { color: var(--dsw-alias-brand-primary); text-decoration: none; }
+.bt-md-link:hover { text-decoration: underline; }
+.bt-md-table-wrap { margin: 8px 0; overflow-x: auto; }
+.bt-md-table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+.bt-md-table th, .bt-md-table td {
+  border: 1px solid var(--dsw-alias-border-l1); padding: 5px 9px; text-align: left;
+  vertical-align: top;
+}
+.bt-md-table th { background: var(--dsw-alias-bg-base); font-weight: 600; white-space: nowrap; }
 .bt-tools { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .bt-tool {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px;

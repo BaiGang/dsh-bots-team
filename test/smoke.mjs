@@ -839,6 +839,60 @@ await check('the frame-wide notice opens the panel and disappears when empty', a
   assert.equal(walk(overlay.component({ controller })).length, 0, 'nothing renders when the queue is empty')
 })
 
+await check('message text renders as markdown instead of raw characters', async () => {
+  controller.set({
+    rows: [{
+      key: 'm1',
+      role: 'assistant',
+      text: [
+        '两件事说清楚：',
+        '',
+        '1. **第一遍写得太糙**：任务文本只有一句话。',
+        '2. 看 `team_assign` 的返回值，再决定。',
+        '',
+        '- 分工：Scout 查配额，Forge 建模。',
+        '',
+        '```sql',
+        'select * from titles;',
+        '```',
+        '',
+        '| 来源 | 许可 |',
+        '|---|---|',
+        '| OMDb | 免费档 |',
+        '',
+        '> 提案不等于已派出。',
+      ].join('\n'),
+      tools: [],
+    }],
+    assignments: [],
+  })
+  const nodes = render()
+  const strings = nodes.filter(node => typeof node === 'string')
+  assert.ok(!strings.some(text => text.includes('**')), 'no literal bold markers survive')
+  assert.ok(!strings.some(text => text.includes('```')), 'no literal fences survive')
+  assert.ok(nodes.some(node => node?.type === 'strong' && JSON.stringify(node.props.children).includes('第一遍写得太糙')))
+  assert.ok(nodes.some(node => node?.type === 'code' && node.props.className === 'bt-md-code'), 'inline code')
+  assert.ok(nodes.some(node => node?.type === 'ol'), 'ordered list')
+  assert.ok(nodes.some(node => node?.type === 'ul'), 'unordered list')
+  assert.ok(nodes.some(node => node?.type === 'pre'), 'fenced code block')
+  assert.ok(nodes.some(node => node?.type === 'table'), 'pipe table')
+  assert.ok(nodes.some(node => node?.type === 'blockquote'), 'block quote')
+  const quoteText = JSON.stringify(nodes.find(node => node?.type === 'blockquote')).includes('提案不等于已派出')
+  assert.ok(quoteText, 'the quote keeps its text')
+  controller.set({ rows: [] })
+})
+
+await check('a message cannot inject markup through a link', async () => {
+  controller.set({ rows: [{ key: 'm2', role: 'assistant', text: '[click](javascript:alert(1)) and [ok](https://example.com)', tools: [] }], assignments: [] })
+  const nodes = render()
+  const links = nodes.filter(node => node?.type === 'a')
+  assert.equal(links.length, 2)
+  assert.equal(links[0].props.href, undefined, 'a javascript: target is dropped')
+  assert.equal(links[1].props.href, 'https://example.com')
+  assert.equal(links[1].props.rel, 'noreferrer noopener')
+  controller.set({ rows: [] })
+})
+
 await check('the sidebar icon draws without a background tile', async () => {
   const icon = registrations.find(entry => entry.options.name === 'sidebar.panellist').component
   const wrapper = icon({ size: 20, active: true })

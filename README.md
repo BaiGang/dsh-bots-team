@@ -56,7 +56,7 @@ A delivery that could not start — usually because a bot has no conversation ye
 - **A confirmation gate** — proposals wait in the panel until you dispatch them; the sidebar entry shows how many are waiting, and each dispatch lands in the target bot's own session.
 - **Named in the sidebar** — one **Bot team** Workspace holds every bot conversation, each titled with its bot's name, instead of an untitled chat in an ungrouped bucket.
 - **Live roster** — Displays each bot's avatar, name, role, and real-time working/idle indicator. Auto-refreshes while open, so bots hired from other windows or chats appear automatically.
-- **Inline chat** — Includes a message transcript, tool-call chips, live status indicator, and a composer wired directly into the underlying DSH Session.
+- **Inline chat** — Includes a message transcript that renders Markdown (headings, lists, tables, fenced code, quotes, links) as real elements — never as injected HTML — plus tool-call chips, a live status indicator, and a composer wired into the underlying DSH Session.
 - **Lazy session startup** — A bot's Session is created on its first message inside its dedicated folder, ensuring `AGENTS.md` instructions are loaded before its first turn.
 - **Built-in role templates** — Ships with **Scout** (Researcher), **Forge** (Builder), **Ledger** (Analyst), and **Quill** (Writer). Three starter bots are pre-hired on first launch.
 - **Agent-manageable** — Built-in agent tools let any DSH chat hire, brief, or fire bots conversationally.
