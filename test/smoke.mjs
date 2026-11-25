@@ -61,6 +61,14 @@ const hostCtx = {
   effect: (factory) => { const dispose = factory(); return dispose },
   webServer: { register: (route) => { routes.push(route); return () => {} } },
   tools: { register: (tool) => { tools.push(tool); return () => {} } },
+  sessionController: {
+    create: async (request) => {
+      created.push({ via: 'sessionController', ...request })
+      const id = `session-fake-${created.length}`
+      liveSessions.add(id)
+      return { sessionId: id }
+    },
+  },
   agents: {
     get: sessionId => agents.get(sessionId),
     resume: async ({ resumeSessionId }) => ({ agent: fakeAgent(resumeSessionId) }),
@@ -360,7 +368,7 @@ await check('a bot with no session can be given a conversation without a task', 
   assert.equal(bot.organized, true, 'the new conversation is titled and filed')
   assert.equal(created.length, before + 1)
   const workspacePath = (await wire('/bots-team/api/state')).body.state.workspacePath
-  assert.equal(created.at(-1).meta.cwd, workspacePath, 'created in the team Workspace')
+  assert.equal(created.at(-1).cwd, workspacePath, 'created in the team Workspace')
   // Opening twice must not create a second conversation.
   const again = await wirePost({ op: 'open', botId: quiet })
   assert.equal(again.body.bot.sessionId, bot.sessionId)

@@ -24,7 +24,7 @@ import path from 'node:path'
 /** Cordis plugin name. */
 export const name = 'bots-team'
 /** Services this plugin contributes to and drives. */
-export const inject = ['webServer', 'tools', 'agents', 'systemPrompt', 'workspaceRegistry', 'sessions', 'sessionTitle']
+export const inject = ['webServer', 'tools', 'agents', 'systemPrompt', 'workspaceRegistry', 'sessions', 'sessionTitle', 'agentDefaultModel', 'sessionController']
 
 /** Route prefix owned by this plugin. */
 const API_PREFIX = '/bots-team/api'
@@ -498,12 +498,18 @@ class TeamStore {
     const bot = this.state?.bots.find(candidate => candidate.id === botId)
     if (bot === undefined) throw new Error(`unknown bot "${botId}"`)
     if (typeof bot.sessionId === 'string' && bot.sessionId !== '') return bot
-    if (this.agents === undefined || typeof this.agents.create !== 'function') {
+    // Create the conversation through the same Host path the browser uses, so the
+    // Session gets the profile's tool composition, preset, and model route. Mints
+    // an agent by hand instead and you get a Session with no tools at all.
+    const controller = this.sessionController
+    if (controller === undefined || typeof controller.create !== 'function') {
       throw new Error('this profile cannot create a Session from the Host')
     }
-    const sessionId = `session-${randomUUID()}`
-    const handle = await this.agents.create({ sessionId, meta: { cwd: this.root } })
-    if (handle === undefined) throw new Error('the agent factory returned no handle')
+    const created = await controller.create({ cwd: this.root })
+    const sessionId = created?.sessionId
+    if (typeof sessionId !== 'string' || sessionId === '') {
+      throw new Error('the session controller returned no Session')
+    }
     await this.bind(botId, sessionId)
     // `bind` runs `organize`, which persists the title and the grouping; hand back
     // the record as stored rather than the pre-organize copy.
@@ -724,11 +730,53 @@ class TeamStore {
       content: [{ type: 'text', text: record.task }],
       source: { kind: 'team-assign' },
     })
-    // A dispatched task settles when the bot stops working; waiting never blocks
-    // the caller, and a completion is recorded for the panel to notice.
-    void Promise.resolve(agent.whenIdle?.())
-      .then(() => this.settle(record.id, 'done').catch(() => {}))
+    // A dispatched task settles when the bot stops working. `whenIdle` alone is
+    // not enough: the turn is queued asynchronously, so asking immediately
+    // resolves against the idle agent that has not started yet and every
+    // dispatch looks finished in milliseconds.
+    void this.settleWhenQuiet(agent, record)
       .catch(error => this.settle(record.id, 'failed', String(error?.message ?? error)).catch(() => {}))
+  }
+
+  /**
+   * Wait for a dispatched task to start, then for the agent to go quiet, and
+   * record the outcome. Waiting never blocks the caller.
+   * @param agent - live agent that received the task.
+   * @param record - assignment being delivered.
+   */
+  async settleWhenQuiet(agent, record) {
+    const turnBefore = this.turnOf(agent)
+    const deadline = Date.now() + 120_000
+    let started = false
+    while (Date.now() < deadline) {
+      if (agent.status !== 'idle') { started = true; break }
+      const turn = this.turnOf(agent)
+      if (typeof turn === 'number' && typeof turnBefore === 'number' && turn > turnBefore) { started = true; break }
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+    if (!started) {
+      await this.settle(record.id, 'failed', 'the bot never started working')
+      return
+    }
+    await agent.whenIdle?.()
+    await this.settle(record.id, 'done')
+  }
+
+  /**
+   * Read the current turn number from a live agent.
+   * @param agent - live agent.
+   * @returns The turn counter, when the projection is available.
+   */
+  turnOf(agent) {
+    try {
+      const session = agent?.session
+      if (session === undefined) return undefined
+      const boundary = this.agents?.turnBoundaryOf?.(session)
+      const turn = boundary?.turn ?? boundary?.lastTurn
+      return typeof turn === 'number' ? turn : undefined
+    } catch {
+      return undefined
+    }
   }
 
   /**
@@ -1218,6 +1266,8 @@ export function apply(ctx, config = {}) {
   store.sessions = ctx.sessions
   store.sessionTitle = ctx.sessionTitle
   store.workspaces = ctx.workspaceRegistry
+  store.agentDefaultModel = ctx.agentDefaultModel
+  store.sessionController = ctx.sessionController
   store.deliver = (bot, record) => store.wake(bot, record)
 
   // Warm the roster (and its folders) without blocking activation, then give
