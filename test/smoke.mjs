@@ -936,6 +936,19 @@ await check('a message cannot inject markup through a link', async () => {
   controller.set({ rows: [] })
 })
 
+await check('text on a brand fill follows the theme instead of staying white', async () => {
+  // --dsw-alias-brand-primary is near-black in light mode and near-white in dark
+  // mode, so a hardcoded white label disappears in dark mode. Everything filled
+  // with the brand token must take its text colour from the inverting token.
+  const css = /const CSS = `([\s\S]*?)`\n/u.exec((await import('node:fs')).readFileSync(path.resolve('client.js'), 'utf8'))[1]
+  const rules = css.match(/[^{}\n]*\{[^}]*\}/gu) ?? []
+  const brandRules = rules.filter(rule => /background(-color)?:\s*var\(--dsw-alias-brand-primary\)/u.test(rule))
+  assert.ok(brandRules.length >= 3, 'the brand-filled controls are still there')
+  for (const rule of brandRules) {
+    assert.ok(!/#fff|#ffffff|white/iu.test(rule), `a brand-filled rule still hardcodes white text: ${rule.slice(0, 80)}`)
+  }
+})
+
 await check('the sidebar icon draws without a background tile', async () => {
   const icon = registrations.find(entry => entry.options.name === 'sidebar.panellist').component
   const wrapper = icon({ size: 20, active: true })

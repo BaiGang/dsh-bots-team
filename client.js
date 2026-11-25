@@ -1503,7 +1503,7 @@ h6.bt-md-h { font-size: 12.5px; }
   color: var(--dsw-alias-label-primary); white-space: nowrap; flex: none;
 }
 .bt-btn:hover, .bt-primary:hover { background: var(--dsw-alias-bg-layer-2); }
-.bt-primary { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); color: #fff; font-weight: 500; }
+.bt-primary { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-bg-base); font-weight: 500; }
 .bt-primary:hover { background: var(--dsw-alias-brand-primary); opacity: 0.9; }
 .bt-primary:disabled, .bt-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .bt-danger { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-border-l1); background: transparent; }
@@ -1565,7 +1565,7 @@ h6.bt-md-h { font-size: 12.5px; }
 .bt-proposals-title { font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
 .bt-count {
   font-size: 10.5px; font-weight: 600; padding: 0 5px; border-radius: 999px; line-height: 16px;
-  color: #fff; background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-base); background: var(--dsw-alias-brand-primary);
 }
 .bt-proposals-hint { font-size: 11px; color: var(--dsw-alias-label-secondary); }
 .bt-proposal {
@@ -1608,7 +1608,7 @@ h6.bt-md-h { font-size: 12.5px; }
 .bt-pill {
   display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
   padding: 8px 12px 8px 10px; border: 0; border-radius: 999px;
-  font: inherit; font-size: 12.5px; font-weight: 500; color: #fff;
+  font: inherit; font-size: 12.5px; font-weight: 500; color: var(--dsw-alias-bg-base);
   background: var(--dsw-alias-brand-primary);
   box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
 }
@@ -1622,7 +1622,7 @@ h6.bt-md-h { font-size: 12.5px; }
 .bt-icon-badge {
   position: absolute; top: -4px; right: -6px; min-width: 13px; height: 13px; padding: 0 3px;
   border-radius: 999px; font-size: 9px; font-weight: 700; line-height: 13px; text-align: center;
-  color: #fff; background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-base); background: var(--dsw-alias-brand-primary);
 }
 `
 
