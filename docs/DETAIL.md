@@ -48,21 +48,22 @@ empty; the chief is hired again on the next start, with its folder kept.
 
 ## Handing work out
 
-The chief takes a request, names the right bot, and calls `team_assign`. That
-call **records** an assignment and sends nothing: it returns
-`awaiting-confirmation`. The panel lists the proposals, the sidebar entry badges
-the count, a frame-wide pill keeps them in sight from any panel, and your click
-on **Dispatch** (or **Dispatch all** for the whole queue) is what delivers the
-task — it arrives
-in the target bot's own conversation as a user message and the bot starts
-working. When it goes idle, the assignment settles and the panel says so.
+The chief takes a request, names the right bot, and calls `team_assign`. Because
+the call comes from the chief, it **delivers**: the tool answers `dispatched`, and
+each task arrives in the target bot's own conversation as a user message. When
+that bot goes idle the assignment settles and the panel says so.
 
-Selecting a bot and pressing **Assign a task** dispatches directly; that click is
-its own confirmation. A delivery that cannot start stays in the queue with its
-reason and a **Retry** instead of disappearing.
+Every other Session — a chat, another window, a subagent — is not the chief, so
+its `team_assign` only records a proposal. The panel lists those, the sidebar
+entry badges the count, a frame-wide pill keeps them in sight, and your click on
+**Dispatch** (or **Dispatch all**) delivers them.
 
-`unattended: true` is the explicit switch for an unwatched profile: there
-`team_assign` delivers immediately. The default is off.
+Selecting a bot and pressing **Assign a task** dispatches to that bot directly. A
+delivery that cannot start stays in the queue with its reason and a **Retry**
+instead of disappearing.
+
+`unattended: true` widens delivery to every caller, chief or not. The default is
+off, so only the chief can send work on its own.
 
 ## Teams to start from
 

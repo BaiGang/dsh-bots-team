@@ -47,24 +47,24 @@ The whole team lives in **one Workspace** — the roster's own directory — so 
 
 ## How Work Gets Handed Out
 
-When you ask the chief for something, it returns a proposal rather than claiming work has already started:
+The chief of staff is the dispatcher: you ask it once and the work goes out.
 
-1. The chief calls `team_assign`, which **records** the assignment for each named bot and returns `awaiting-confirmation`. Nothing is sent yet.
-2. The Team panel lists pending items in a queue, the sidebar entry shows a count badge, and a small pill follows you across panels so you can jump back in one click.
-3. You dispatch a single item, or click **Dispatch all** to send the entire queue at once — that click is the confirmation. Each task lands in the target bot's Session as a user message attributed to this plugin, and the bot begins working.
-4. When the bot returns to idle, the assignment settles and the panel updates accordingly.
+1. The chief calls `team_assign` with one assignment per named bot. Because the call comes from the chief, it **delivers immediately** — the tool answers `dispatched`, and each task lands in the target bot's Session as a user message attributed to this plugin.
+2. When that bot returns to idle, the assignment settles and the panel updates.
 
-You can also bypass the chief and dispatch directly: select any bot, click **Assign a task**, and enter the prompt. Your click serves as confirmation.
+Every other Session — this chat, another window, a subagent — is not the chief. Its `team_assign` only **records a proposal**: the Team panel queues it, the sidebar entry shows a count badge, and a small pill follows you across panels. Your click, or **Dispatch all** for the whole queue, is what sends it.
+
+You can also dispatch to one bot yourself: select it, click **Assign a task**, and enter the prompt.
 
 If a delivery cannot start — usually because the bot has no Session yet — the item stays in the queue with the failure reason and a **Retry** button instead of disappearing silently.
 
-**Unattended mode** is an explicit opt-in for cases where no one is watching. Set `unattended: true` to let `team_assign` deliver immediately; leave it off and agents can only propose. The panel displays the active mode so it is always clear which behavior is in effect.
+**Unattended mode** (`unattended: true`) widens that: every caller delivers, not just the chief. The panel displays the active mode, so it is always clear which behaviour is in force.
 
 ## Features
 
 * **Sidebar integration** — Adds a global **Team** entry to the left sidebar (two chat bubbles and a small spark for the chief) that opens the roster view in the main column.
 * **Built-in chief of staff** — Pinned first in the roster to decompose requests and propose assignments. If fired by accident, it is hired again on the next launch; the old conversation stays in DSH's session list, and the new chief starts a fresh one.
-* **Confirmation gate** — Proposals wait in the panel until you dispatch them; the sidebar badge tracks pending items, and each dispatch lands in the target bot's own Session.
+* **The chief dispatches, everyone else proposes** — the chief's `team_assign` sends the work as you asked; another Session can only queue a proposal, which the panel badge counts until you dispatch it.
 * **Named sidebar entries** — One **Bot team** Workspace holds every bot conversation, each titled with its bot's name instead of an untitled chat in an ungrouped list.
 * **Live roster** — Shows each bot's avatar, name, role, and real-time working/idle status. Auto-refreshes while open so bots hired from other windows or chats appear automatically.
 * **Inline chat** — Renders Markdown transcripts (headings, lists, tables, fenced code, quotes, links) as real elements rather than injected HTML, alongside tool-call chips, a live status indicator, and a composer wired directly to the underlying DSH Session.
