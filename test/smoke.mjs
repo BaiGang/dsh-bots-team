@@ -46,6 +46,7 @@ const fakeAgent = (sessionId) => {
   if (agents.has(sessionId)) return agents.get(sessionId)
   const agent = {
     sessionId,
+    session: { id: sessionId },
     status: 'idle',
     followup(message) {
       delivered.push({ sessionId, message })
@@ -386,6 +387,25 @@ await check('starting a bot over archives its conversation and clears the bindin
   // Put the fixture back for the checks that follow.
   await wirePost({ op: 'bind', botId: 'scout', sessionId: 'sess-scout' })
   archived.length = 0
+})
+
+await check('the chief dispatches directly while every other caller still proposes', async () => {
+  const assign = tools.find(tool => tool.name === 'team_assign')
+
+  // A call from the chief's own Session delivers.
+  await wirePost({ op: 'bind', botId: 'chief', sessionId: 'sess-chief' })
+  hostCtx.agents.currentInitiator = () => fakeAgent('sess-chief')
+  const chiefRun = await assign.execute({ assignments: [{ botId: 'forge', task: 'Build the thing.' }] }, {})
+  assert.equal(chiefRun.mode, 'dispatched')
+  assert.equal(chiefRun.assignments[0].status, 'sent')
+
+  // A call from anywhere else still waits for a click.
+  hostCtx.agents.currentInitiator = () => fakeAgent('sess-somebody-else')
+  const otherRun = await assign.execute({ assignments: [{ botId: 'ledger', task: 'Check the numbers.' }] }, {})
+  assert.equal(otherRun.mode, 'awaiting-confirmation')
+  assert.equal(otherRun.assignments[0].status, undefined)
+
+  hostCtx.agents.currentInitiator = () => undefined
 })
 
 await check('team_status reports sessions, live agents, and recent assignments', async () => {

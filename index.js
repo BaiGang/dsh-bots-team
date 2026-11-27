@@ -56,7 +56,7 @@ const CHIEF = {
     'You do three things: turn a request into assignments for the right teammate, hand them over, and report what came back.',
     '- Name the teammate before the task, and say why that one.',
     '- Keep a proposal to at most three assignments, and merge work that belongs together.',
-    '- You cannot send work yourself: `team_assign` records a proposal, and the person confirms it in the Team panel. Tell them that plainly once, then stop.',
+    '- You dispatch directly: `team_assign` sends each task to its bot right away, and the result tells you what was delivered. Say who is doing what; never ask the person to confirm something the tool already sent.',
     '- Never claim a bot is working, finished, or stuck unless `team_status` says so. When it does not know, say you do not know yet.',
     '- When several bots are involved, close with one line naming who is doing what.',
   ].join('\n'),
@@ -247,7 +247,28 @@ class TeamStore {
     const state = this.normalize(parsed)
     if (state.bots.length === 0) this.seed(state)
     this.ensureChief(state)
+    this.migrateChiefPersona(state)
     return state
+  }
+
+  /**
+   * Move a chief hired by an older build onto the dispatcher wording, without
+   * touching anything the person may have written themselves: only the exact
+   * sentence this version replaced is rewritten.
+   * @param state - roster state to migrate in place.
+   */
+  migrateChiefPersona(state) {
+    const chief = state.bots.find(bot => bot.chief === true)
+    if (chief === undefined) return
+    const previous = '- You cannot send work yourself: `team_assign` records a proposal, and the person confirms it in the Team panel. Tell them that plainly once, then stop.'
+    if (!chief.persona.includes(previous)) return
+    const current = CHIEF.persona
+      .split('\n')
+      .find(line => line.startsWith('- You dispatch directly:'))
+    if (current === undefined) return
+    chief.persona = chief.persona.replace(previous, current)
+    chief.updatedAt = Date.now()
+    void this.ensureFolder(chief).catch(() => {})
   }
 
   /**
@@ -380,6 +401,22 @@ class TeamStore {
       current = await readFile(target, 'utf8')
     } catch {}
     if (current !== body) await writeFile(target, body, 'utf8')
+  }
+
+  /**
+   * Whether the tool call in flight was initiated by the chief of staff's own
+   * Session. The ambient initiator carries the calling Agent through the driver
+   * chain, which is the only way a shared tool can tell callers apart.
+   * @returns true when the chief itself calls `team_assign`.
+   */
+  isChiefCaller() {
+    try {
+      const initiator = this.initiator?.()
+      const bot = this.botBySession(initiator?.session?.id)
+      return bot?.chief === true
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -1156,10 +1193,14 @@ function teamTools(store, unattended) {
           .map(item => ({ botId: String(item?.botId ?? ''), task: String(item?.task ?? '') }))
         if (items.length === 0) throw new Error('team_assign needs at least one assignment')
         const created = await store.propose(items, 'chief')
-        if (unattended()) {
+        // The chief of staff is the delegated dispatcher: its own call delivers.
+        // Any other Session is still a proposal the person confirms, and
+        // `unattended` remains the switch that lets every caller deliver.
+        const chiefCall = typeof store.isChiefCaller === 'function' && store.isChiefCaller()
+        if (unattended() || chiefCall) {
           const delivered = []
           for (const record of created) delivered.push(await store.dispatch(record.id))
-          return { mode: 'unattended', assignments: delivered }
+          return { mode: chiefCall && !unattended() ? 'dispatched' : 'unattended', assignments: delivered }
         }
         return {
           mode: 'awaiting-confirmation',
@@ -1237,7 +1278,7 @@ function guidanceText(store) {
     `This profile runs a team of bots, each one a separate Session with its own folder and persona: ${roster}.`,
     chief === undefined
       ? 'Work is handed over with the `team_assign` tool.'
-      : `${chief.name} is the chief of staff and hands work over with \`team_assign\`; the person confirms each assignment in the Team panel.`,
+      : `${chief.name} is the chief of staff and hands work over with \`team_assign\`, which delivers immediately when ${chief.name} calls it; any other Session's \`team_assign\` still waits for a person to confirm in the Team panel.`,
     'Use `team_roster` to see the team before naming a bot, and `team_status` before claiming what any bot is doing.',
   ].join('\n')
 }
@@ -1268,6 +1309,7 @@ export function apply(ctx, config = {}) {
   store.workspaces = ctx.workspaceRegistry
   store.agentDefaultModel = ctx.agentDefaultModel
   store.sessionController = ctx.sessionController
+  store.initiator = () => ctx.agents.currentInitiator()
   store.deliver = (bot, record) => store.wake(bot, record)
 
   // Warm the roster (and its folders) without blocking activation, then give

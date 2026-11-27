@@ -166,7 +166,7 @@ DSH 中的任意 Agent 都可通过以下内置工具查看或管理团队：
 | [`docs/DETAIL.md`](docs/DETAIL.md) | 在 DSH 插件管理器中展示的详细介绍页。 |
 | [`assets/`](assets/) | 插件市场预览图（`icon-180.png`）及其 SVG 源文件（`tile.svg`）。 |
 | [`icon.svg`](icon.svg) | 插件图标，通过 `./icon` 导出提供。 |
-| [`test/smoke.mjs`](test/smoke.mjs) | 端到端冒烟测试（共 51 项断言，覆盖前后端逻辑，无需启动浏览器）。 |
+| [`test/smoke.mjs`](test/smoke.mjs) | 端到端冒烟测试（共 52 项断言，覆盖前后端逻辑，无需启动浏览器）。 |
 
 **零第三方依赖：** 后端仅使用 Node.js 内置模块，可在任意 DSH Profile 下直接运行；前端仅从 DSH 运行时模块表中引用 React。
 
@@ -175,7 +175,7 @@ DSH 中的任意 Agent 都可通过以下内置工具查看或管理团队：
 运行冒烟测试：
 
 ```sh
-node test/smoke.mjs      # 执行全部 51 项检查；任一失败返回非 0 退出码
+node test/smoke.mjs      # 执行全部 52 项检查；任一失败返回非 0 退出码
 ```
 
 测试脚本通过模拟 Node 请求/响应对象直接调用 HTTP 路由，在临时目录中验证名册操作与全部六个 Agent 工具；随后通过 `__ModuleLoader__` 桩代码和轻量级 React 垫片加载 `client.js`，校验渲染输出与数据流 —— 全程无需真实浏览器。其中几条专门防范历史回归：旧快照不能复活已清空的 Session 绑定、人设不会泄漏到名册之外的 Session、品牌色填充的控件不得将文字颜色写死为白色。
