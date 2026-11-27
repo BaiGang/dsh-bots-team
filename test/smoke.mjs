@@ -318,6 +318,64 @@ await check('a dispatch can only be claimed once, even when two clicks race', as
   releaseIdle()
 })
 
+await check('a record that already finished is not moved again by a late waiter', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-terminal-'))
+  const store = new host.TeamStore(dir, () => {})
+  await store.load()
+  const [record] = await store.propose([{ botId: 'scout', task: '先取消，再迟到一个 done。' }], 'panel')
+  await store.cancel(record.id)
+  const late = await store.settle(record.id, 'done')
+  assert.equal(late.status, 'cancelled', 'a late settle cannot overwrite a decision')
+  const state = await new host.TeamStore(dir, () => {}).load()
+  assert.equal(state.assignments.find(entry => entry.id === record.id).status, 'cancelled')
+  await rm(dir, { recursive: true, force: true })
+})
+
+await check('restarting or removing a bot stops reporting its in-flight work', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-orphan-'))
+  const store = new host.TeamStore(dir, () => {})
+  store.workspaces = { archiveSession: async () => {} }
+  await store.load()
+  const [first] = await store.propose([{ botId: 'scout', task: '重启前在跑的活。' }], 'panel')
+  await store.mutate(async (state) => {
+    const entry = state.assignments.find(candidate => candidate.id === first.id)
+    entry.status = 'sent'
+    entry.sentAt = Date.now()
+    await store.write(state)
+  })
+  await store.restart('scout')
+  const afterRestart = (await store.load()).assignments.find(entry => entry.id === first.id)
+  assert.equal(afterRestart.status, 'cancelled', 'the archived conversation took the task with it')
+  assert.match(String(afterRestart.error), /archived/u)
+
+  const [second] = await store.propose([{ botId: 'forge', task: '解雇前在跑的活。' }], 'panel')
+  await store.mutate(async (state) => {
+    const entry = state.assignments.find(candidate => candidate.id === second.id)
+    entry.status = 'sent'
+    await store.write(state)
+  })
+  await store.remove('forge')
+  const afterRemove = (await store.load()).assignments.find(entry => entry.id === second.id)
+  assert.equal(afterRemove.status, 'cancelled')
+  await rm(dir, { recursive: true, force: true })
+})
+
+await check('one conversation cannot be bound to two bots', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-bindu-'))
+  const store = new host.TeamStore(dir, () => {})
+  store.workspaces = { create: async () => undefined, list: () => [], delete: async () => false }
+  store.sessions = { get: () => ({ id: 'sess-shared' }) }
+  store.sessionTitle = { rename: () => ({}) }
+  await store.load()
+  await store.bind('scout', 'sess-shared')
+  await store.bind('forge', 'sess-shared')
+  const state = await new host.TeamStore(dir, () => {}).load()
+  const holders = state.bots.filter(bot => bot.sessionId === 'sess-shared')
+  assert.equal(holders.length, 1, 'only one bot owns the conversation')
+  assert.equal(holders[0].id, 'forge', 'the newest binding wins')
+  await rm(dir, { recursive: true, force: true })
+})
+
 await check('the roster endpoint refuses anything but a same-origin loopback JSON call', async () => {
   const crossSite = await wire('/bots-team/api/bots', {
     method: 'POST',
@@ -1134,6 +1192,28 @@ await check('message text renders as markdown instead of raw characters', async 
   assert.ok(nodes.some(node => node?.type === 'blockquote'), 'block quote')
   const quoteText = JSON.stringify(nodes.find(node => node?.type === 'blockquote')).includes('提案不等于已派出')
   assert.ok(quoteText, 'the quote keeps its text')
+  controller.set({ rows: [] })
+})
+
+await check('a deeply nested quote cannot take the panel down', async () => {
+  controller.set({
+    rows: [{
+      key: 'deep',
+      role: 'assistant',
+      text: `${'> '.repeat(3000)}最深的一层。`,
+      tools: [],
+    }],
+    assignments: [],
+  })
+  const nodes = render()
+  const strings = []
+  const collect = (node) => {
+    if (typeof node === 'string') { strings.push(node); return }
+    if (Array.isArray(node)) { node.forEach(collect); return }
+    if (node !== null && typeof node === 'object') collect(node.props?.children)
+  }
+  collect(nodes)
+  assert.ok(strings.some(text => text.includes('最深的一层')), 'the message still shows its content')
   controller.set({ rows: [] })
 })
 

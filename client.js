@@ -424,7 +424,7 @@ window.__ModuleLoader__.load({
        */
       async dispatchAll() {
         const pending = this.queue()
-        if (pending.length === 0) return
+        if (pending.length === 0 || this.snapshot.dispatching === true) return
         this.set({ dispatching: true, notice: '' })
         try {
           for (const record of pending) {
@@ -457,7 +457,7 @@ window.__ModuleLoader__.load({
        */
       async dismissAll() {
         const pending = this.queue()
-        if (pending.length === 0) return
+        if (pending.length === 0 || this.snapshot.dispatching === true) return
         try {
           const body = await call('/bots', { method: 'POST', body: JSON.stringify({ op: 'cancelAll' }) })
           this.set({ assignments: body.state?.assignments ?? this.snapshot.assignments, notice: '' })

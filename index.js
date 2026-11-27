@@ -520,6 +520,13 @@ class TeamStore {
       const bot = state.bots.find(candidate => candidate.id === botId)
       if (bot === undefined) throw new Error(`unknown bot "${botId}"`)
       bot.sessionId = typeof sessionId === 'string' && sessionId !== '' ? sessionId : null
+      // A Session belongs to one bot: clear any other holder, or the persona
+      // lookup and the settle watcher would resolve the wrong teammate.
+      if (bot.sessionId !== null) {
+        for (const other of state.bots) {
+          if (other.id !== bot.id && other.sessionId === bot.sessionId) other.sessionId = null
+        }
+      }
       bot.updatedAt = Date.now()
       await this.write(state)
       return bot
@@ -539,6 +546,15 @@ class TeamStore {
       const index = state.bots.findIndex(bot => bot.id === botId)
       if (index === -1) throw new Error(`unknown bot "${botId}"`)
       const [removed] = state.bots.splice(index, 1)
+      for (const record of state.assignments) {
+        if (record.botId !== removed.id) continue
+        if (record.status === 'proposed') { record.status = 'cancelled'; record.finishedAt = Date.now() }
+        if (record.status === 'sent') {
+          record.status = 'cancelled'
+          record.finishedAt = Date.now()
+          record.error = 'the bot was removed before this finished'
+        }
+      }
       await this.write(state)
       return { id: removed.id, folder: removed.folder, chief: removed.chief === true }
     })
@@ -619,6 +635,15 @@ class TeamStore {
       stored.sessionId = null
       stored.organized = false
       stored.updatedAt = Date.now()
+      // The archived conversation took its running task with it, so stop
+      // reporting that task as in flight until the next restart reconciles it.
+      for (const record of state.assignments) {
+        if (record.botId === stored.id && record.status === 'sent') {
+          record.status = 'cancelled'
+          record.finishedAt = Date.now()
+          record.error = 'the conversation was archived before this finished'
+        }
+      }
       await this.write(state)
       return stored
     })
@@ -752,15 +777,10 @@ class TeamStore {
    * @returns The updated record.
    */
   async reopen(id) {
-    await this.findAssignment(id, ['failed'])
-    return this.mutate(async (state) => {
-      const record = state.assignments.find(candidate => candidate.id === String(id))
-      record.status = 'proposed'
-      record.error = ''
-      record.finishedAt = null
-      await this.write(state)
-      return record
-    })
+    // The check belongs inside the mutation: between a separate read and this
+    // write, a dispatch can claim the record and reopen would re-queue a task
+    // that is already running.
+    return this.transition(id, ['failed'], 'proposed', '', true)
   }
 
   /**
@@ -769,8 +789,7 @@ class TeamStore {
    * @returns The updated record.
    */
   async cancel(id) {
-    await this.findAssignment(id, ['proposed', 'failed'])
-    return this.settle(id, 'cancelled')
+    return this.transition(id, ['proposed', 'failed'], 'cancelled', '')
   }
 
   /**
@@ -795,12 +814,33 @@ class TeamStore {
    * @returns The updated record.
    */
   settle(id, status, error) {
+    return this.transition(id, undefined, status, error)
+  }
+
+  /**
+   * Move one assignment, refusing to leave a terminal state. A background waiter
+   * can fire after the record was cancelled or reopened, and without this guard a
+   * late `done` would overwrite the person's decision.
+   * @param id - assignment identity.
+   * @param allowed - accepted current statuses, or undefined for any.
+   * @param status - next status.
+   * @param error - failure reason for `failed`.
+   * @returns The record after the transition.
+   */
+  transition(id, allowed, status, error, force = false) {
+    const TERMINAL = ['done', 'failed', 'cancelled']
     return this.mutate(async (state) => {
-      const record = state.assignments.find(candidate => candidate.id === id)
+      const record = state.assignments.find(candidate => candidate.id === String(id))
       if (record === undefined) throw new Error(`unknown assignment "${id}"`)
+      if (allowed !== undefined && !allowed.includes(record.status)) {
+        throw new Error(`assignment is ${record.status}, not ${allowed.join(' or ')}`)
+      }
+      // A person asking for a reopen may leave `failed`; nothing automatic may.
+      if (!force && TERMINAL.includes(record.status) && record.status !== status) return record
       record.status = status
       if (status === 'sent') record.sentAt = Date.now()
-      if (status === 'done' || status === 'failed' || status === 'cancelled') record.finishedAt = Date.now()
+      if (status === 'proposed') { record.error = ''; record.finishedAt = null }
+      if (TERMINAL.includes(status)) record.finishedAt = Date.now()
       if (typeof error === 'string' && error !== '') record.error = error
       await this.write(state)
       return record
@@ -1336,7 +1376,8 @@ function teamTools(store, unattended) {
         const items = (Array.isArray(args.assignments) ? args.assignments : [])
           .map(item => ({ botId: String(item?.botId ?? ''), task: String(item?.task ?? '') }))
         if (items.length === 0) throw new Error('team_assign needs at least one assignment')
-        const created = await store.propose(items, 'chief')
+        const chiefCall0 = typeof store.isChiefCaller === 'function' && store.isChiefCaller()
+        const created = await store.propose(items, chiefCall0 ? 'chief' : 'session')
         // The chief of staff is the delegated dispatcher: its own call delivers.
         // Any other Session is still a proposal the person confirms, and
         // `unattended` remains the switch that lets every caller deliver.
