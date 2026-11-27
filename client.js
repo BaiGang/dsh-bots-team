@@ -258,6 +258,22 @@ window.__ModuleLoader__.load({
         this.conversation = undefined
         this.disposed = false
         this.toastTimer = undefined
+        this.drafts = new Map()
+        /** Assignment ids whose dispatch is already in flight in this tab. */
+        this.dispatching = new Set()
+        /** One in-flight conversation creation per bot, so Enter twice cannot mint two. */
+        this.pendingSessions = new Map()
+        // Keep the roster warm whether or not the panel is on screen: the sidebar
+        // badge and the frame-wide notice read this snapshot too, and they used to
+        // stay empty because only the panel ever refreshed it.
+        this.pollTimer = setInterval(() => {
+          if (this.disposed) return
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+          if (this.snapshot.phase === 'ready') void this.refresh()
+          else void this.load()
+        }, 20000)
+        // Node keeps a process alive for a live timer; the browser has no unref.
+        this.pollTimer?.unref?.()
       }
 
       subscribe = (listener) => {
@@ -273,6 +289,13 @@ window.__ModuleLoader__.load({
        */
       set(patch) {
         if (this.disposed) return
+        // useSyncExternalStore compares with Object.is, so publishing an
+        // identical-looking object re-renders the whole panel every 15s.
+        let changed = false
+        for (const key of Object.keys(patch)) {
+          if (!Object.is(this.snapshot[key], patch[key])) { changed = true; break }
+        }
+        if (!changed) return
         this.snapshot = { ...this.snapshot, ...patch }
         for (const listener of [...this.listeners]) {
           try {
@@ -295,6 +318,8 @@ window.__ModuleLoader__.load({
             bots,
             templates: Array.isArray(state.templates) ? state.templates : [],
             dataDir: state.dataDir ?? '',
+            workspaceId: typeof state.workspaceId === 'string' ? state.workspaceId : undefined,
+            workspacePath: typeof state.workspacePath === 'string' ? state.workspacePath : undefined,
             assignments: Array.isArray(state.assignments) ? state.assignments : [],
             chiefId: typeof state.chiefId === 'string' ? state.chiefId : bots.find(bot => bot.chief === true)?.id,
             unattended: state.unattended === true,
@@ -333,6 +358,8 @@ window.__ModuleLoader__.load({
               templates: state.templates ?? this.snapshot.templates,
               assignments,
               unattended: state.unattended === true,
+              workspaceId: typeof state.workspaceId === 'string' ? state.workspaceId : this.snapshot.workspaceId,
+              workspacePath: typeof state.workspacePath === 'string' ? state.workspacePath : this.snapshot.workspacePath,
             })
             if (finished !== undefined) this.notify(this.t('finished').replace('{name}', finished.botName))
           }
@@ -369,6 +396,8 @@ window.__ModuleLoader__.load({
        * @param id - assignment identity.
        */
       async dispatchProposal(id) {
+        if (this.dispatching.has(id)) return
+        this.dispatching.add(id)
         const record = this.snapshot.assignments.find(candidate => candidate.id === id)
         try {
           if (record?.status === 'failed') {
@@ -384,6 +413,8 @@ window.__ModuleLoader__.load({
           this.notify(this.t('dispatched').replace('{name}', record?.botName ?? ''))
         } catch (error) {
           this.set({ notice: `${this.t('dispatch')}: ${String(error?.message ?? error)}` })
+        } finally {
+          this.dispatching.delete(id)
         }
       }
 
@@ -461,6 +492,24 @@ window.__ModuleLoader__.load({
       async ensureSession(bot) {
         if (bot === undefined) return undefined
         if (typeof bot.sessionId === 'string' && bot.sessionId !== '') return bot
+        // Two presses of Enter used to mint two Sessions; share the in-flight one.
+        const inFlight = this.pendingSessions.get(bot.id)
+        if (inFlight !== undefined) return inFlight
+        const creation = this.createSession(bot)
+        this.pendingSessions.set(bot.id, creation)
+        try {
+          return await creation
+        } finally {
+          if (this.pendingSessions.get(bot.id) === creation) this.pendingSessions.delete(bot.id)
+        }
+      }
+
+      /**
+       * Create one bot's conversation inside the team Workspace and bind it.
+       * @param bot - roster record without a session.
+       * @returns The bound bot, or undefined when creation failed.
+       */
+      async createSession(bot) {
         const workspaceId = this.snapshot.workspaceId
         const sessionId = await this.ctx.sessions.create(
           typeof workspaceId === 'string' && workspaceId !== ''
@@ -492,6 +541,7 @@ window.__ModuleLoader__.load({
         const body = text.trim()
         const bot = this.bot(this.snapshot.selectedId)
         if (body === '' || bot === undefined) return
+        if (this.snapshot.starting === true || this.snapshot.running === true) return
         this.set({ assigning: true, notice: '' })
         try {
           await this.ensureSession(bot)
@@ -551,6 +601,7 @@ window.__ModuleLoader__.load({
        * @param {object} bot - roster record carrying `sessionId`.
        */
       async openConversation(bot) {
+        this.closeConversation()
         let reference
         try {
           reference = this.ctx.sessions.retain(bot.sessionId, { source: 'botsTeam' })
@@ -588,7 +639,9 @@ window.__ModuleLoader__.load({
             this.set({ notice: String(error?.message ?? error) })
             this.closeConversation()
           }
+          return undefined
         }
+        return conversation
       }
 
       /** Keep typing out of React state churn beyond the draft itself. */
@@ -610,16 +663,21 @@ window.__ModuleLoader__.load({
         this.set({ draft: '', notice: '', starting: true })
         this.drafts.set(bot.id, '')
         try {
+          let conversation = this.conversation
           if (typeof bot.sessionId !== 'string' || bot.sessionId === '') {
             // One path for every first message: the team Workspace, the bot's
             // own title, and a binding the rest of the panel can see.
             const bound = await this.ensureSession(bot)
             if (bound === undefined) throw new Error('could not open a conversation for this bot')
-            await this.openConversation(bound)
-            const ready = this.conversation
-            if (ready !== undefined) await ready.reference.ready
+            conversation = await this.openConversation(bound)
+            if (conversation !== undefined) await conversation.reference.ready
           }
-          const conversation = this.conversation
+          // The user may have switched bots while the conversation was opening;
+          // send to the bot this message was written for, never to the one that
+          // happens to be selected now.
+          if (this.snapshot.selectedId !== bot.id || this.conversation !== conversation) {
+            throw new Error('the selection changed while this message was being sent')
+          }
           if (conversation?.session === undefined) throw new Error('the bot session is not ready')
           const result = await conversation.session.prompt([{ type: 'text', text: body }], 'queue')
           if (result !== undefined && result.ok === false) {
@@ -665,8 +723,10 @@ window.__ModuleLoader__.load({
           this.closeConversation()
           this.set({ bots, editing: undefined, selectedId: undefined, rows: [], running: false })
           this.select(selected ?? bots[0]?.id)
+          return true
         } catch (error) {
           this.set({ notice: String(error?.message ?? error) })
+          return false
         }
       }
 
@@ -718,6 +778,7 @@ window.__ModuleLoader__.load({
       /** Stop every owned subscription and reference. */
       dispose() {
         this.disposed = true
+        if (this.pollTimer !== undefined) clearInterval(this.pollTimer)
         if (this.toastTimer !== undefined) clearTimeout(this.toastTimer)
         this.closeConversation()
         this.listeners.clear()
@@ -786,9 +847,11 @@ window.__ModuleLoader__.load({
       const remove = async () => {
         if (existing === undefined) return
         setBusy(true)
-        await controller.deleteBot(existing.id)
+        // Keep the dialog open when the Host refused: closing it would move the
+        // reason into the chat area, where the next selection clears it.
+        const removed = await controller.deleteBot(existing.id)
         setBusy(false)
-        onClose()
+        if (removed !== false) onClose()
       }
       const templates = existing === undefined ? (snapshot.templates ?? []) : []
       return h('div', { className: 'bt-mask', role: 'dialog', 'aria-modal': 'true', 'aria-label': existing ? t('edit') : t('newBot') },
@@ -936,6 +999,7 @@ window.__ModuleLoader__.load({
         ? t('noticePillOne')
         : t('noticePill').replace('{n}', String(pending))
       return h('div', { className: 'bt-pill-layer' },
+        h('style', undefined, CSS),
         h('button', {
           type: 'button',
           className: 'bt-pill',
@@ -966,7 +1030,9 @@ window.__ModuleLoader__.load({
     function inlineMarkdown(text, prefix = 'i') {
       if (typeof text !== 'string' || text === '') return [text ?? '']
       const nodes = []
-      const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)|(~~[^~\n]+~~)|(\[[^\]\n]+\]\([^)\s]+\))/gu
+      // Underscores only emphasise at word boundaries: `read_message_id` is an
+      // identifier, not two emphasis runs, and agents write those constantly.
+      const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|((?<![\p{L}\p{N}_])__[^_\n]+__(?![\p{L}\p{N}_]))|(\*[^*\n]+\*)|((?<![\p{L}\p{N}_])_[^_\n]+_(?![\p{L}\p{N}_]))|(~~[^~\n]+~~)|(\[[^\]\n]{1,200}\]\([^)\s]{1,500}\))/gu
       let last = 0
       let index = 0
       for (const match of text.matchAll(pattern)) {
@@ -1020,21 +1086,37 @@ window.__ModuleLoader__.load({
      * @returns {Array} block vnodes.
      */
     function markdown(source) {
+      return markdownAt(source, 0)
+    }
+
+    /**
+     * Parse one block run at a known nesting depth. A blockquote or a nested list
+     * re-enters the parser, so the depth is capped: a message made of a thousand
+     * `>` prefixes used to blow the stack and take the whole panel down with it.
+     * @param {string} source - message text.
+     * @param {number} depth - current nesting depth.
+     * @returns {Array} block vnodes.
+     */
+    function markdownAt(source, depth) {
       const key = String(source ?? '')
-      const cached = markdownCache.get(key)
+      const cacheKey = `${depth}\u0000${key}`
+      const cached = markdownCache.get(cacheKey)
       if (cached !== undefined) return cached
-      const rendered = markdownBlocks(key)
-      if (markdownCache.size > 300) markdownCache.clear()
-      markdownCache.set(key, rendered)
+      const rendered = markdownBlocks(key, depth)
+      if (markdownCache.size > 300) markdownCache.delete(markdownCache.keys().next().value)
+      markdownCache.set(cacheKey, rendered)
       return rendered
     }
+
+    /** Deepest block nesting the renderer will follow; past it the text is flat. */
+    const MARKDOWN_MAX_DEPTH = 8
 
     /**
      * The parse behind {@link markdown}.
      * @param {string} source - message text.
      * @returns {Array} block vnodes.
      */
-    function markdownBlocks(source) {
+    function markdownBlocks(source, depth = 0) {
       const lines = String(source ?? '').replace(/\r\n?/gu, '\n').split('\n')
       const blocks = []
       let i = 0
@@ -1086,12 +1168,22 @@ window.__ModuleLoader__.load({
         }
 
         if (/^\s*>\s?/u.test(line)) {
+          if (depth >= MARKDOWN_MAX_DEPTH) {
+            // Too deep to be meaningful: show the rest as plain text.
+            const plain = []
+            while (i < lines.length && /^\s*>\s?/u.test(lines[i])) {
+              plain.push(lines[i].replace(/^\s*>\s?/u, ''))
+              i += 1
+            }
+            blocks.push(h('p', { key: nextKey(), className: 'bt-md-p' }, inlineMarkdown(plain.join('\n'), nextKey())))
+            continue
+          }
           const quoted = []
           while (i < lines.length && /^\s*>\s?/u.test(lines[i])) {
             quoted.push(lines[i].replace(/^\s*>\s?/u, ''))
             i += 1
           }
-          blocks.push(h('blockquote', { key: nextKey(), className: 'bt-md-quote' }, markdown(quoted.join('\n'))))
+          blocks.push(h('blockquote', { key: nextKey(), className: 'bt-md-quote' }, markdownAt(quoted.join('\n'), depth + 1)))
           continue
         }
 
@@ -1122,7 +1214,7 @@ window.__ModuleLoader__.load({
           }
           blocks.push(h(ordered ? 'ol' : 'ul', { key: nextKey(), className: 'bt-md-list' },
             items.map((item, itemIndex) =>
-              h('li', { key: `li${itemIndex}` }, markdown(item.join('\n'))))))
+              h('li', { key: `li${itemIndex}` }, markdownAt(item.join('\n'), depth + 1)))))
           continue
         }
 
@@ -1228,6 +1320,7 @@ window.__ModuleLoader__.load({
             className: 'bt-textarea bt-composer-input',
             value: snapshot.draft,
             rows: 2,
+            'aria-label': t('composer').replace('{name}', bot.name),
             placeholder: t('composer').replace('{name}', bot.name),
             onChange: event => controller.setDraft(event.target.value),
             onKeyDown: keydown,
@@ -1235,6 +1328,8 @@ window.__ModuleLoader__.load({
           h('button', {
             className: 'bt-primary',
             type: 'button',
+            'aria-label': t('send'),
+            'aria-busy': snapshot.starting ? 'true' : undefined,
             onClick: send,
             disabled: snapshot.draft.trim() === '' || snapshot.starting,
           }, snapshot.starting ? '…' : t('send'))))
@@ -1246,13 +1341,10 @@ window.__ModuleLoader__.load({
       const snapshot = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
       const t = controller.t
       React.useEffect(() => { void controller.load() }, [controller])
-      // Keep the roster current while it is on screen; a background change
-      // (another window, or an agent using team_hire) then appears here too.
+      // The controller polls on its own; opening the panel just refreshes at once.
       React.useEffect(() => {
-        const timer = setInterval(() => {
-          if (typeof document === 'undefined' || document.visibilityState === 'visible') void controller.refresh()
-        }, 15000)
-        return () => clearInterval(timer)
+        void controller.load()
+        void controller.refresh()
       }, [controller])
       if (snapshot.phase === 'loading') {
         return h('div', { className: 'bt-root bt-center' }, h('style', undefined, CSS), h('p', undefined, t('loading')))
@@ -1306,15 +1398,33 @@ window.__ModuleLoader__.load({
 
     /** Sidebar glyph: two bot heads, the nearer one outlined. */
     function TeamIcon(props) {
+      const controller = props.controller
+      if (controller === undefined) return paintIcon(props, 0)
+      return h(TeamIconLive, { ...props, controller })
+    }
+
+    /**
+     * Icon with a live badge. The hook lives here, unconditionally, so a caller
+     * that renders the icon without a controller cannot change the hook order.
+     * @param props - icon props plus the controller.
+     * @returns Icon element.
+     */
+    function TeamIconLive(props) {
+      const controller = props.controller
+      const snapshot = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+      const pending = snapshot.assignments.filter(record => record.status === 'proposed').length
+      return paintIcon(props, pending)
+    }
+
+    /**
+     * Draw the glyph and, when proposals are waiting, its count badge.
+     * @param props - icon props.
+     * @param pending - number of pending proposals.
+     * @returns Icon element.
+     */
+    function paintIcon(props, pending) {
       const size = typeof props.size === 'number' ? props.size : 20
       const active = props.active === true
-      const controller = props.controller
-      const snapshot = controller === undefined
-        ? undefined
-        : React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
-      const pending = snapshot === undefined
-        ? 0
-        : snapshot.assignments.filter(record => record.status === 'proposed').length
       const glyph = h('svg', {
         viewBox: '0 0 24 24',
         width: size,
@@ -1336,6 +1446,7 @@ window.__ModuleLoader__.load({
       h('path', { d: 'M8 17.8h4.2' }))
       if (pending === 0) return glyph
       return h('span', { className: 'bt-icon-wrap' },
+        h('style', undefined, CSS),
         glyph,
         h('span', { className: 'bt-icon-badge', 'aria-label': String(pending) }, pending > 9 ? '9+' : String(pending)))
     }
@@ -1344,7 +1455,7 @@ window.__ModuleLoader__.load({
     class Boundary extends React.Component {
       constructor(props) {
         super(props)
-        this.state = { error: undefined }
+        this.state = { error: undefined, attempt: 0 }
       }
 
       static getDerivedStateFromError(error) {
@@ -1356,9 +1467,14 @@ window.__ModuleLoader__.load({
           return h('div', { className: 'bt-root bt-center' },
             h('style', undefined, CSS),
             h('h2', undefined, 'Team panel failed'),
-            h('p', { className: 'bt-error' }, String(this.state.error?.message ?? this.state.error)))
+            h('p', { className: 'bt-error' }, String(this.state.error?.message ?? this.state.error)),
+            h('button', {
+              className: 'bt-primary',
+              type: 'button',
+              onClick: () => this.setState({ error: undefined, attempt: (this.state.attempt ?? 0) + 1 }),
+            }, 'Reload the panel'))
         }
-        return this.props.children
+        return h(React.Fragment, { key: `attempt-${this.state.attempt ?? 0}` }, this.props.children)
       }
     }
 
@@ -1402,6 +1518,10 @@ window.__ModuleLoader__.load({
 }
 .bt-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-success-primary); display: inline-block; flex: none; }
 .bt-dot-live { background: var(--dsw-alias-brand-primary); animation: bt-pulse 1.15s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .bt-dot-live, .bt-pill-dot { animation: none; }
+  .bt-primary, .bt-btn, .bt-pill, .bt-row { transition: none; }
+}
 @keyframes bt-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
 .bt-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .bt-chat-head {

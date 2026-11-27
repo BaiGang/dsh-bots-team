@@ -1164,7 +1164,10 @@ await check('text on a brand fill follows the theme instead of staying white', a
 await check('the sidebar icon draws without a background tile', async () => {
   const icon = registrations.find(entry => entry.options.name === 'sidebar.panellist').component
   const wrapper = icon({ size: 20, active: true })
-  const tree = wrapper.type(wrapper.props)
+  // Function components are expanded here so the assertion is about the drawn
+  // SVG, not about which wrapper component happens to own the hook.
+  const expand = (node) => (typeof node?.type === 'function' ? expand(node.type(node.props)) : node)
+  const tree = expand(wrapper)
   assert.equal(tree.type, 'svg')
   const nodes = walk(tree)
   nodes.forEach(node => {
