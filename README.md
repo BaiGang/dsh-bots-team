@@ -160,13 +160,13 @@ Other agents in DSH can inspect and manage your roster programmatically:
 | Path | Purpose |
 | --- | --- |
 | [`index.js`](index.js) | **Host backend:** Roster store, workspace/`AGENTS.md` provisioning, `/bots-team/api` routes, and agent tools. |
-| [`client.js`](client.js) | **Browser client:** Registers the `sidebar.panellist` icon and `main` panel via a single `__ModuleLoader__` factory. |
+| [`client.js`](client.js) | **Browser client:** Registers the `sidebar.panellist` icon, the `main` panel, and the `shell.overlay` notice through one `__ModuleLoader__` factory. |
 | [`cordis.patch.yml`](cordis.patch.yml) | Bundle patch that registers the host plugin row. |
 | [`locale/`](locale/) | Localized plugin metadata (titles, descriptions, and detail doc paths). |
 | [`docs/DETAIL.md`](docs/DETAIL.md) | Plugin overview displayed inside the DSH Plugin Manager. |
 | [`assets/`](assets/) | Storefront tile (`icon-180.png`) and its SVG source (`tile.svg`). |
 | [`icon.svg`](icon.svg) | Plugin icon, resolved through the `./icon` export. |
-| [`test/smoke.mjs`](test/smoke.mjs) | Headless test suite (52 checks covering both host and client). |
+| [`test/smoke.mjs`](test/smoke.mjs) | Headless test suite (56 checks covering both host and client). |
 
 **Zero external dependencies:** The host backend uses only Node.js built-ins so it runs across any DSH profile. The browser client imports only React from DSH's runtime module table.
 
@@ -175,7 +175,7 @@ Other agents in DSH can inspect and manage your roster programmatically:
 Run the smoke test suite:
 
 ```sh
-node test/smoke.mjs      # runs 52 checks; exits non-zero on failure
+node test/smoke.mjs      # runs 56 checks; exits non-zero on failure
 ```
 
 The suite drives HTTP routes through mocked Node request/response pairs, exercises roster operations and all six agent tools against a temporary directory, and loads `client.js` through a `__ModuleLoader__` stub with a lightweight React shim to assert rendered output and data flow — no browser required. It also guards against past regressions: a cleared Session binding cannot be resurrected by a stale snapshot, a persona never leaks to a Session outside the roster, and no brand-filled control hardcodes a white label.

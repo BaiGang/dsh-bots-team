@@ -1,6 +1,6 @@
 {
   "name": "dsh-bots-team",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "type": "module",
   "description": "A team of AI bots in the DeepSeek Harness left sidebar: every bot is a DSH Session with its own folder and persona, led by a chief of staff that hands work out.",
   "license": "MIT",
@@ -27,7 +27,8 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
     "index.js",
@@ -36,7 +37,6 @@
     "locale/*.json",
     "assets",
     "docs",
-    "test",
     "icon.svg",
     "README.md",
     "README.zh.md",
@@ -57,5 +57,9 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "icon": "./icon.svg",
+  "engines": {
+    "dsh": ">=0.2.2-rc.5"
   }
 }

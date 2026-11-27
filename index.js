@@ -16,7 +16,7 @@
  *
  * @module dsh-bots-team
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -24,7 +24,7 @@ import path from 'node:path'
 /** Cordis plugin name. */
 export const name = 'bots-team'
 /** Services this plugin contributes to and drives. */
-export const inject = ['webServer', 'tools', 'agents', 'systemPrompt', 'workspaceRegistry', 'sessions', 'sessionTitle', 'agentDefaultModel', 'sessionController']
+export const inject = ['webServer', 'tools', 'agents', 'systemPrompt', 'workspaceRegistry', 'sessions', 'sessionTitle', 'sessionController']
 
 /** Route prefix owned by this plugin. */
 const API_PREFIX = '/bots-team/api'
@@ -186,6 +186,8 @@ class TeamStore {
     this.deliver = undefined
     /** In-flight wake-ups, so two dispatches cannot resume one session twice. */
     this.waking = new Map()
+    /** One in-flight Session creation per bot, so two callers cannot mint two. */
+    this.opening = new Map()
     /** Set by `apply` from the row configuration. */
     this.unattended = false
     /** The single Workspace every bot Session lives in. */
@@ -238,11 +240,24 @@ class TeamStore {
    * @returns Normalized roster state.
    */
   async readState() {
+    const parse = async (file) => JSON.parse(await readFile(file, 'utf8'))
     let parsed
     try {
-      parsed = JSON.parse(await readFile(this.file, 'utf8'))
+      parsed = await parse(this.file)
     } catch (error) {
-      if (error?.code !== 'ENOENT') this.warn(`bots-team: unreadable roster (${String(error?.message ?? error)}); starting a fresh one`)
+      if (error?.code === 'ENOENT') {
+        // First run: nothing to recover, and nothing to lose.
+      } else {
+        // A locked file, a permission error, or half-written JSON must never be
+        // treated as an empty roster — writing that back erases every binding.
+        // The previous copy is kept on each write, so try it before giving up.
+        try {
+          parsed = await parse(`${this.file}.bak`)
+          this.warn(`bots-team: roster was unreadable (${String(error?.message ?? error)}); recovered the last good copy`)
+        } catch {
+          throw new Error(`roster file is unreadable, refusing to overwrite it: ${String(error?.message ?? error)}`)
+        }
+      }
     }
     const state = this.normalize(parsed)
     if (state.bots.length === 0) this.seed(state)
@@ -319,7 +334,9 @@ class TeamStore {
       persona: personaText(raw.persona) || existing?.persona || '',
       // A stored record is a record, not a patch: reading `existing` alone here
       // dropped every Session binding on reload.
-      folder: text(raw.folder, existing?.folder ?? '', 400) || path.join(this.botsDir, id),
+      // Derived, never taken from input: a patched `folder` would otherwise let a
+      // caller drop an AGENTS.md into any directory on the machine.
+      folder: path.join(this.botsDir, id),
       sessionId: typeof raw.sessionId === 'string' && raw.sessionId !== ''
         ? raw.sessionId
         : (typeof existing?.sessionId === 'string' && existing.sessionId !== '' ? existing.sessionId : null),
@@ -381,8 +398,13 @@ class TeamStore {
    */
   async write(state) {
     await mkdir(this.root, { recursive: true })
-    const temporary = `${this.file}.${process.pid}.tmp`
+    const temporary = `${this.file}.${process.pid}.${randomUUID()}.tmp`
     await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+    try {
+      await copyFile(this.file, `${this.file}.bak`)
+    } catch (error) {
+      if (error?.code !== 'ENOENT') this.warn(`bots-team: could not refresh the backup (${String(error?.message ?? error)})`)
+    }
     await rename(temporary, this.file)
   }
 
@@ -535,6 +557,8 @@ class TeamStore {
     const bot = this.state?.bots.find(candidate => candidate.id === botId)
     if (bot === undefined) throw new Error(`unknown bot "${botId}"`)
     if (typeof bot.sessionId === 'string' && bot.sessionId !== '') return bot
+    const pending = this.opening.get(botId)
+    if (pending !== undefined) return pending
     // Create the conversation through the same Host path the browser uses, so the
     // Session gets the profile's tool composition, preset, and model route. Mints
     // an agent by hand instead and you get a Session with no tools at all.
@@ -542,6 +566,22 @@ class TeamStore {
     if (controller === undefined || typeof controller.create !== 'function') {
       throw new Error('this profile cannot create a Session from the Host')
     }
+    const creation = this.createAndBind(botId, controller)
+    this.opening.set(botId, creation)
+    try {
+      return await creation
+    } finally {
+      if (this.opening.get(botId) === creation) this.opening.delete(botId)
+    }
+  }
+
+  /**
+   * Create one bot's Session through the Host controller and bind it.
+   * @param botId - bot identity.
+   * @param controller - session controller service.
+   * @returns The stored bot record.
+   */
+  async createAndBind(botId, controller) {
     const created = await controller.create({ cwd: this.root })
     const sessionId = created?.sessionId
     if (typeof sessionId !== 'string' || sessionId === '') {
@@ -592,12 +632,18 @@ class TeamStore {
    */
   async propose(items, source) {
     return this.mutate(async (state) => {
-      const created = []
-      for (const item of items) {
+      // Validate the whole batch first: a bad row used to leave the earlier rows
+      // in memory while the write never happened, so `snapshot()` showed
+      // assignments that did not exist on disk.
+      const planned = items.map(item => {
         const bot = state.bots.find(candidate => candidate.id === String(item?.botId ?? ''))
         if (bot === undefined) throw new Error(`unknown bot "${String(item?.botId ?? '')}"`)
         const task = text(item?.task, '', 4000)
         if (task === '') throw new Error('an assignment needs a task')
+        return { bot, task }
+      })
+      const created = []
+      for (const { bot, task } of planned) {
         const record = {
           id: randomUUID().slice(0, 8),
           botId: bot.id,
@@ -625,7 +671,22 @@ class TeamStore {
    * @returns The updated record.
    */
   async dispatch(id) {
-    const record = await this.findAssignment(id, ['proposed', 'failed'])
+    // Claim first, deliver second. Delivery resumes an agent and can take
+    // seconds, so a second click (or the chief and the panel at once) used to
+    // pass the same `proposed` check and send the task twice.
+    const record = await this.mutate(async (state) => {
+      const candidate = state.assignments.find(entry => entry.id === id)
+      if (candidate === undefined) throw new Error(`unknown assignment "${id}"`)
+      if (candidate.status !== 'proposed' && candidate.status !== 'failed') {
+        throw new Error(`assignment "${id}" is ${candidate.status}, not waiting`)
+      }
+      candidate.status = 'sent'
+      candidate.sentAt = Date.now()
+      candidate.finishedAt = null
+      candidate.error = ''
+      await this.write(state)
+      return { ...candidate }
+    })
     const bot = this.state?.bots.find(candidate => candidate.id === record.botId)
     try {
       if (this.deliver === undefined) throw new Error('dispatch is unavailable in this profile')
@@ -637,7 +698,7 @@ class TeamStore {
     } catch (error) {
       return this.settle(record.id, 'failed', String(error?.message ?? error))
     }
-    return this.settle(record.id, 'sent')
+    return this.state?.assignments.find(entry => entry.id === record.id) ?? record
   }
 
   /**
@@ -649,7 +710,15 @@ class TeamStore {
     await this.load()
     const open = (this.state?.assignments ?? []).filter(record => record.status === 'proposed')
     const results = []
-    for (const record of open) results.push(await this.dispatch(record.id))
+    for (const record of open) {
+      // One row that can no longer be dispatched must not abort the batch.
+      try {
+        results.push(await this.dispatch(record.id))
+      } catch (error) {
+        const failed = await this.settle(record.id, 'failed', String(error?.message ?? error)).catch(() => undefined)
+        if (failed !== undefined) results.push(failed)
+      }
+    }
     return results
   }
 
@@ -786,6 +855,9 @@ class TeamStore {
     const deadline = Date.now() + 120_000
     let started = false
     while (Date.now() < deadline) {
+      // The Host may unload this plugin mid-wait; stop instead of writing to a
+      // roster nobody owns any more.
+      if (this.lifetime?.aborted === true) return
       if (agent.status !== 'idle') { started = true; break }
       const turn = this.turnOf(agent)
       if (typeof turn === 'number' && typeof turnBefore === 'number' && turn > turnBefore) { started = true; break }
@@ -795,7 +867,14 @@ class TeamStore {
       await this.settle(record.id, 'failed', 'the bot never started working')
       return
     }
-    await agent.whenIdle?.()
+    const racing = await Promise.race([
+      Promise.resolve(agent.whenIdle?.()).then(() => 'idle'),
+      new Promise(resolve => {
+        const timer = setTimeout(() => resolve('timeout'), 30 * 60_000)
+        timer.unref?.()
+      }),
+    ])
+    if (racing !== 'idle' || this.lifetime?.aborted === true) return
     await this.settle(record.id, 'done')
   }
 
@@ -813,6 +892,29 @@ class TeamStore {
       return typeof turn === 'number' ? turn : undefined
     } catch {
       return undefined
+    }
+  }
+
+  /**
+   * Settle assignments a previous Host left in flight. A record written as
+   * `sent` and then orphaned by a restart used to stay in flight forever, so
+   * `team_status` kept reporting work that nothing was doing.
+   *
+   * A live, running agent is left alone; a live idle agent counts as finished;
+   * anything without an agent records why it never completed.
+   */
+  async reconcileSent() {
+    await this.load()
+    const records = (this.state?.assignments ?? []).filter(record => record.status === 'sent')
+    for (const record of records) {
+      const bot = this.state?.bots.find(candidate => candidate.id === record.botId)
+      const agent = typeof bot?.sessionId === 'string' ? this.agentFor(bot.sessionId) : undefined
+      if (agent !== undefined && agent.status !== 'idle') continue
+      if (agent !== undefined) {
+        await this.settle(record.id, 'done')
+        continue
+      }
+      await this.settle(record.id, 'failed', 'the Host restarted before this finished')
     }
   }
 
@@ -864,9 +966,14 @@ class TeamStore {
     if (this.workspace !== undefined) return this.workspace
     const registry = this.workspaces
     if (registry === undefined || typeof registry.create !== 'function') return undefined
-    const workspace = await registry.create(this.root, WORKSPACE_TITLE)
+    const existing = typeof registry.resolveByPath === 'function'
+      ? await registry.resolveByPath(this.root)
+      : undefined
+    // Only a Workspace this plugin creates gets the plugin's name; one the person
+    // renamed keeps their title across restarts.
+    const workspace = existing ?? (await registry.create(this.root, WORKSPACE_TITLE))
     if (workspace === undefined) return undefined
-    if (workspace.title !== WORKSPACE_TITLE) await workspace.setTitle?.(WORKSPACE_TITLE)
+    if (existing === undefined && workspace.title !== WORKSPACE_TITLE) await workspace.setTitle?.(WORKSPACE_TITLE)
     this.workspace = workspace
     return workspace
   }
@@ -879,11 +986,15 @@ class TeamStore {
   async prunePerBotWorkspaces() {
     const registry = this.workspaces
     if (registry === undefined || typeof registry.list !== 'function' || typeof registry.delete !== 'function') return
-    const prefix = `${this.root}${path.sep}`
+    let root = this.root
+    try {
+      root = await realpath(this.root)
+    } catch {}
+    const prefix = `${root}${path.sep}`
     for (const workspace of registry.list()) {
       const workspacePath = workspace?.path
       if (typeof workspacePath !== 'string') continue
-      if (!workspacePath.startsWith(prefix)) continue
+      if (workspacePath === root || !workspacePath.startsWith(prefix)) continue
       try {
         await registry.delete(workspace.id)
       } catch (error) {
@@ -925,6 +1036,10 @@ class TeamStore {
    */
   async resume(sessionId) {
     const handle = await this.agents.resume({ resumeSessionId: sessionId })
+    if (handle?.dispose !== undefined) {
+      if (this.handles === undefined) this.handles = new Map()
+      this.handles.set(sessionId, handle)
+    }
     const agent = handle?.agent ?? handle
     if (agent === undefined) throw new Error('resume returned no agent')
     return agent
@@ -947,9 +1062,10 @@ async function dispatchRequest(request, store) {
   const route = request.pathname.slice(API_PREFIX.length) || '/state'
   const reply = (status, body) => ({ status, body })
   const header = name => request.header(name) ?? ''
-  // A page on another site must not reach this roster: reject a cross-site
-  // fetch, and accept a body only as JSON so a plain form post cannot write.
-  if (header('sec-fetch-site') === 'cross-site') return reply(403, { ok: false, error: 'cross-site request refused' })
+  // A page on another site must not reach this roster, and a body is accepted
+  // only as JSON, so a plain form post cannot write.
+  const refused = admit(request)
+  if (refused !== undefined) return reply(refused.status, refused.body)
   try {
     if (route === '/state' || route === '/state/') {
       if (request.method !== 'GET' && request.method !== 'HEAD') return reply(405, { ok: false, error: 'GET only' })
@@ -958,12 +1074,8 @@ async function dispatchRequest(request, store) {
     }
     if (route === '/bots' || route === '/bots/') {
       if (request.method !== 'POST') return reply(405, { ok: false, error: 'POST only' })
-      if (!header('content-type').includes('application/json')) return reply(415, { ok: false, error: 'expected application/json' })
-      const origin = header('origin')
-      const host = header('host')
-      if (origin !== '' && host !== '' && origin !== `http://${host}` && origin !== `https://${host}`) {
-        return reply(403, { ok: false, error: 'cross-origin write refused' })
-      }
+      const mediaType = header('content-type').split(';')[0].trim().toLowerCase()
+      if (mediaType !== 'application/json') return reply(415, { ok: false, error: 'expected application/json' })
       let body
       try {
         body = request.body === '' ? {} : JSON.parse(request.body)
@@ -1032,6 +1144,30 @@ async function readBody(source) {
   return Buffer.concat(chunks).toString('utf8')
 }
 
+/** Host names that count as the machine itself. */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
+
+/**
+ * Reject a request before any work happens: only the loopback name may reach
+ * this endpoint, and a write must arrive as a same-origin JSON POST.
+ * @param request - transport-free request view.
+ * @returns The rejection, or undefined when the request may proceed.
+ */
+function admit(request) {
+  const header = name => request.header(name) ?? ''
+  const host = header('host')
+  if (host !== '') {
+    const name = host.replace(/:\d+$/u, '')
+    if (!LOOPBACK_HOSTS.has(name)) return { status: 403, body: { ok: false, error: 'loopback only' } }
+  }
+  if (header('sec-fetch-site') === 'cross-site') return { status: 403, body: { ok: false, error: 'cross-site request refused' } }
+  const origin = header('origin')
+  if (origin !== '' && host !== '' && origin !== `http://${host}` && origin !== `https://${host}`) {
+    return { status: 403, body: { ok: false, error: 'cross-origin write refused' } }
+  }
+  return undefined
+}
+
 /**
  * Node handler for the whole API prefix.
  * @param req - incoming request.
@@ -1049,17 +1185,25 @@ async function handle(req, res, store) {
     if (req.method === 'HEAD') res.end()
     else res.end(text)
   }
+  const view = {
+    method: req.method ?? 'GET',
+    pathname: new URL(req.url ?? '/', 'http://localhost').pathname,
+    header: name => req.headers[name],
+  }
+  // Refuse before draining a body we already know we will not accept.
+  const refused = admit(view)
+  if (refused !== undefined) {
+    send(refused.status, refused.body)
+    req.resume?.()
+    return
+  }
   try {
     const body = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' ? await readBody(req) : ''
-    const { status, body: payload } = await dispatchRequest({
-      method: req.method ?? 'GET',
-      pathname: new URL(req.url ?? '/', 'http://localhost').pathname,
-      header: name => req.headers[name],
-      body,
-    }, store)
+    const { status, body: payload } = await dispatchRequest({ ...view, body }, store)
     send(status, payload)
   } catch (error) {
-    send(500, { ok: false, error: String(error?.message ?? error) })
+    const message = String(error?.message ?? error)
+    send(message === 'request body too large' ? 413 : 500, { ok: false, error: message })
   }
 }
 
@@ -1088,7 +1232,7 @@ function teamTools(store, unattended) {
     botId: record.botId,
     botName: record.botName,
     status: record.status,
-    task: record.task.length > 160 ? `${record.task.slice(0, 160)}…` : record.task,
+    task: String(record.task ?? '').length > 160 ? `${String(record.task).slice(0, 160)}…` : String(record.task ?? ''),
     error: record.error,
   }))
   return [
@@ -1165,7 +1309,7 @@ function teamTools(store, unattended) {
     },
     {
       name: 'team_assign',
-      description: 'Hand work to one or more bots. Records a proposal and returns it; the person confirms in the Team panel unless this profile runs unattended, in which case the task is delivered immediately. The task becomes a user message in the bot\'s own conversation, so write it as an instruction with its acceptance criteria.',
+      description: 'Hand work to one or more bots. When the chief of staff calls this, the tasks are delivered immediately; any other Session only records a proposal that the person confirms in the Team panel (unless this profile runs unattended). A delivered task becomes a user message in the bot\'s own conversation, so write it as an instruction with its acceptance criteria.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1306,8 +1450,15 @@ export function apply(ctx, config = {}) {
   store.agents = ctx.agents
   store.sessions = ctx.sessions
   store.sessionTitle = ctx.sessionTitle
+  const lifetime = new AbortController()
+  store.lifetime = lifetime.signal
+  ctx.effect(() => () => {
+    lifetime.abort()
+    for (const handle of store.handles?.values?.() ?? []) {
+      try { handle.dispose?.() } catch {}
+    }
+  }, 'bots-team: stop background waits')
   store.workspaces = ctx.workspaceRegistry
-  store.agentDefaultModel = ctx.agentDefaultModel
   store.sessionController = ctx.sessionController
   store.initiator = () => ctx.agents.currentInitiator()
   store.deliver = (bot, record) => store.wake(bot, record)
@@ -1318,6 +1469,7 @@ export function apply(ctx, config = {}) {
     .then(() => store.ensureWorkspace())
     .then(() => store.prunePerBotWorkspaces())
     .then(() => store.migrate())
+    .then(() => store.reconcileSent())
     .catch(error => warn(`bots-team: roster unavailable (${String(error?.message ?? error)})`))
 
   ctx.effect(() => ctx.webServer.register({

@@ -303,6 +303,72 @@ await check('a dispatched task lands as a user message in the bot session', asyn
   assert.equal(after.assignments.find(candidate => candidate.id === record.id).status, 'done')
 })
 
+await check('a dispatch can only be claimed once, even when two clicks race', async () => {
+  await wirePost({ op: 'bind', botId: 'scout', sessionId: 'sess-scout' })
+  const proposed = await wirePost({ op: 'propose', items: [{ botId: 'scout', task: '只有一次。' }], source: 'chief' })
+  const id = proposed.body.assignments[0].id
+  const before = delivered.length
+  const [first, second] = await Promise.all([
+    wirePost({ op: 'dispatch', assignmentId: id }),
+    wirePost({ op: 'dispatch', assignmentId: id }),
+  ])
+  const codes = [first.status, second.status].sort()
+  assert.deepEqual(codes, [200, 500], 'the second caller is refused instead of sending again')
+  assert.equal(delivered.length - before, 1, 'the bot received exactly one task')
+  releaseIdle()
+})
+
+await check('the roster endpoint refuses anything but a same-origin loopback JSON call', async () => {
+  const crossSite = await wire('/bots-team/api/bots', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site', host: '127.0.0.1:57132' },
+    body: JSON.stringify({ op: 'open', botId: 'scout' }),
+  })
+  assert.equal(crossSite.status, 403)
+
+  const rebinding = await request('/bots-team/api/state', { headers: { host: 'evil.example:57132' } })
+  assert.equal(rebinding.status, 403, 'a non-loopback Host is refused even when Origin matches')
+
+  const badType = await wire('/bots-team/api/bots', {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain', host: '127.0.0.1:57132' },
+    body: JSON.stringify({ op: 'open', botId: 'scout' }),
+  })
+  assert.equal(badType.status, 415, 'a form post cannot write')
+
+  const huge = await wire('/bots-team/api/bots', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', host: '127.0.0.1:57132' },
+    body: JSON.stringify({ op: 'create', bot: { name: 'x'.repeat(300_000) } }),
+  })
+  assert.equal(huge.status, 413, 'an oversized body is refused with 413')
+})
+
+await check('a binding cannot be pointed at an arbitrary folder', async () => {
+  const patched = await wirePost({ op: 'update', botId: 'scout', patch: { folder: '/tmp/anywhere-at-all' } })
+  assert.equal(patched.status, 200)
+  assert.ok(patched.body.bot.folder.endsWith('/bots/scout'), 'the folder always follows the roster')
+})
+
+await check('a record left in flight by a restart is settled on activation', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-reconcile-'))
+  const first = new host.TeamStore(dir, () => {})
+  await first.load()
+  const [record] = await first.propose([{ botId: 'forge', task: '半路断电。' }], 'chief')
+  await first.mutate(async (state) => {
+    const entry = state.assignments.find(candidate => candidate.id === record.id)
+    entry.status = 'sent'
+    entry.sentAt = Date.now()
+    await first.write(state)
+  })
+  await first.reconcileSent()
+  const state = await new host.TeamStore(dir, () => {}).load()
+  const settled = state.assignments.find(candidate => candidate.id === record.id)
+  assert.equal(settled.status, 'failed')
+  assert.match(String(settled.error), /restarted/u)
+  await rm(dir, { recursive: true, force: true })
+})
+
 await check('a panel click dispatches directly, and cancel drops a proposal', async () => {
   const before = delivered.length
   const direct = await wirePost({ op: 'assign', botId: 'scout', task: '直接派一条。' })
@@ -423,7 +489,8 @@ await check('every bot session lands in the one shared workspace', async () => {
   assert.equal(workspaces.length, 1, 'the team shares a single workspace')
   const team = workspaces[0]
   assert.equal(team.title, 'Bot team')
-  assert.ok(team.path.endsWith('bots-team-wired-') || team.path.length > 0)
+  const root = (await wire('/bots-team/api/state')).body.state.workspacePath
+  assert.equal(team.path, root, 'the shared workspace sits at the roster directory itself')
   assert.ok(team.sessionIds.includes('sess-forge'), 'a bound bot session is attached to it')
   assert.equal(titles.get('sess-scout'), 'Scout', 'and the conversation is named after its bot')
   const perBot = workspaces.filter(item => item.path.includes('/bots/'))
@@ -431,20 +498,34 @@ await check('every bot session lands in the one shared workspace', async () => {
 })
 
 await check('the same bot is not renamed twice', async () => {
-  const before = titles.get('sess-scout')
-  const store2 = new host.TeamStore(dataDir, () => {})
-  store2.workspaces = hostCtx.workspaceRegistry
-  store2.sessions = hostCtx.sessions
-  store2.sessionTitle = { rename: () => { throw new Error('must not rename again') } }
-  await store2.migrate()
-  assert.equal(titles.get('sess-scout'), before, 'the organized flag stops a second rename')
+  // Count the renames instead of relying on a throwing stub: the migration skips
+  // organised bots entirely, so a throw would never be reached and the check
+  // would pass even if every load renamed the conversation again.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-rename-'))
+  const first = new host.TeamStore(dir, () => {})
+  first.workspaces = { create: async () => undefined, list: () => [], delete: async () => false }
+  first.sessions = { get: () => ({ id: 'sess-counted' }) }
+  first.sessionTitle = { rename: (session, title) => { titles.set(session.id, title); return { title } } }
+  await first.load()
+  await first.bind('scout', 'sess-counted')
+  assert.equal(titles.get('sess-counted'), 'Scout', 'binding a conversation names it once')
+
+  let renames = 0
+  const second = new host.TeamStore(dir, () => {})
+  second.workspaces = { create: async () => undefined, list: () => [], delete: async () => false }
+  second.sessions = { get: () => undefined }
+  second.sessionTitle = { rename: () => { renames += 1 } }
+  second.agents = { get: () => undefined, resume: async () => ({ agent: {}, dispose() {} }), turnBoundaryOf: () => undefined }
+  await second.migrate()
+  await second.migrate()
+  assert.equal(renames, 0, 'an already-organised bot is never renamed again')
+  await rm(dir, { recursive: true, force: true })
 })
 
-await check('a bot with no session gets no workspace', async () => {
-  const hired = await wirePost({ op: 'create', bot: { name: 'Quiet', role: 'Waiter', persona: 'Wait for work.' } })
-  const folder = hired.body.bot.folder
-  const lonely = workspaces.find(item => item.path === folder)
-  assert.equal(lonely, undefined, 'nothing is created until a conversation exists')
+await check('no workspace is created per bot folder', async () => {
+  assert.equal(workspaces.length, 1, 'still exactly one workspace for the whole team')
+  const perBot = workspaces.filter(item => item.path.includes('/bots/'))
+  assert.deepEqual(perBot, [], 'no workspace points at a bot folder')
 })
 
 await check('a bot session receives its own persona, and nothing else does', async () => {
@@ -511,14 +592,28 @@ await check('a session binding survives a reload', async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-await check('survives a corrupt roster file', async () => {
-  const broken = await mkdtemp(path.join(os.tmpdir(), 'bots-team-broken-'))
-  const { writeFile } = await import('node:fs/promises')
-  await writeFile(path.join(broken, 'team.json'), '{not json', 'utf8')
-  const repaired = new host.TeamStore(broken, () => {})
-  const state = await repaired.load()
-  assert.equal(state.bots.length, 4, 'a corrupt file is replaced by the chief and the starter team')
-  await rm(broken, { recursive: true, force: true })
+await check('a corrupt roster is recovered from the backup, never silently wiped', async () => {
+  const { writeFile, readFile } = await import('node:fs/promises')
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'bots-team-broken-'))
+
+  // Half-written JSON with a good backup next to it: recover, do not re-seed.
+  const store = new host.TeamStore(dir, () => {})
+  await store.load()
+  await store.bind('scout', 'sess-kept')
+  await store.mutate(async (state) => { await store.write(state) })   // refreshes .bak
+  await writeFile(path.join(dir, 'team.json'), '{not json', 'utf8')
+  const recovered = await new host.TeamStore(dir, () => {}).load()
+  assert.equal(recovered.bots.length, 4, 'the roster still has its bots')
+  assert.ok(recovered.bots.some(bot => bot.sessionId === 'sess-kept'), 'and the binding survived')
+
+  // No backup either: refuse to load rather than overwrite the file with a seed.
+  const lonely = await mkdtemp(path.join(os.tmpdir(), 'bots-team-lonely-'))
+  await writeFile(path.join(lonely, 'team.json'), '{not json', 'utf8')
+  await assert.rejects(() => new host.TeamStore(lonely, () => {}).load(), /refusing to overwrite/u)
+  assert.equal(await readFile(path.join(lonely, 'team.json'), 'utf8'), '{not json', 'the damaged file is left untouched')
+
+  await rm(dir, { recursive: true, force: true })
+  await rm(lonely, { recursive: true, force: true })
 })
 
 /* ---------------------------------------------------------------- browser client */
@@ -605,6 +700,13 @@ await check('both READMEs still describe the code that ships', async () => {
     const widths = new Set(block[1].trimEnd().split('\n').map(line => [...line].reduce((total, char) => total + cells(char), 0)))
     assert.equal(widths.size, 1, `${name}'s sketch lines share one width (got ${[...widths].join(',')})`)
   }
+
+  // The detail page the plugin manager shows must not drift either.
+  const detail = read('docs/DETAIL.md')
+  const toolRows = [...detail.matchAll(/^\| `(team_[a-z]+)`/gmu)].map(match => match[1])
+  assert.deepEqual(toolRows.sort(), registered.sort(), 'the detail page lists exactly the registered tools')
+  assert.ok(!/four tools|三个工具/iu.test(detail), 'the detail page counts the tools correctly')
+  assert.ok(!/deleting the bot and hiring|删掉这个 Bot 重新招/u.test(detail), 'it describes Start a new conversation, not re-hiring')
 
   // Relative links must point at files that exist.
   for (const [name, text] of [['README.md', en], ['README.zh.md', zh]]) {
@@ -1064,9 +1166,14 @@ await check('the sidebar icon draws without a background tile', async () => {
   const wrapper = icon({ size: 20, active: true })
   const tree = wrapper.type(wrapper.props)
   assert.equal(tree.type, 'svg')
-  walk(tree).forEach(node => {
+  const nodes = walk(tree)
+  nodes.forEach(node => {
     assert.ok(!['style', 'script', 'image', 'foreignObject'].includes(node?.type), `${String(node?.type)} is not allowed in an icon`)
   })
+  assert.ok(nodes.filter(node => node?.type === 'rect').length >= 2, 'two chat bubbles are drawn')
+  assert.equal(nodes[0].props.stroke, 'currentColor', 'the glyph follows the theme text colour')
+  assert.ok(nodes.every(node => node?.props?.fill === undefined || node.props.fill === 'none' || node.props.fill === 'currentColor'),
+    'no hardcoded fill colours in the icon')
 })
 
 await check('the sidebar icon carries the pending-proposal count', async () => {

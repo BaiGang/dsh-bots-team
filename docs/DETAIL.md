@@ -83,7 +83,7 @@ persona. The persona is what the bot follows, and it can be rewritten any time.
 
 ## What the agent sees
 
-The host backend also registers four tools, so an agent can manage the same roster:
+The host backend also registers six tools, so an agent can manage the same roster:
 
 | Tool | What it does |
 |---|---|
@@ -114,10 +114,12 @@ session are left alone, so a removal is recoverable.
   loads the client from `file://` cannot reach it, so the panel reports that the
   roster endpoint did not answer.
 - The roster is shared by every session in the profile; bots are not per-project.
-- A bot owns one conversation. Starting over means deleting the bot and hiring a
-  fresh one; forking the conversation is still done from the session list.
+- A bot owns one conversation. **Start a new conversation** in the editor archives
+  it and opens a fresh one; forking the conversation is still done from the session
+  list.
 - Deleting a bot does not archive its session; that stays in the session list.
 - A bot needs a session before it can receive work. The panel creates and binds
-  one on the first dispatch; when creation fails the assignment records that
+  one on the first dispatch, and `op: open` does the same from the Host for a
+  caller that has no browser; when creation fails the assignment records that
   reason instead of doing nothing.
 - Completion is noticed on the panel's next refresh, not pushed.
